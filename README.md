@@ -37,6 +37,20 @@ Einmal pro Woche testet der Bot 108 Varianten auf dem Kursverlauf aller Märkte:
 
 Zu enge Stops verlieren schon durch die Gebühren. Ein Stop von 1 ATR auf dem 1h-Chart liegt oft nur etwa 0,5 % entfernt, so viel kosten auch Kauf und Verkauf zusammen. Stablecoins wie USDC oder EURC werden nicht analysiert.
 
+## Merkmale: bisher gegen erweitert
+
+Das Modell lernt aus 16 Basis-Merkmalen: EMA-Trend, RSI, MACD, Bollinger, Volumenspitze, Momentum und Volatilität. Dazu gibt es 14 erweiterte Merkmale, angelehnt an verbreitete TradingView-Werkzeuge:
+
+- **24h-VWAP:** Abstand des Kurses zum volumengewichteten Durchschnittspreis.
+- **ADX:** Trendstärke und Trendrichtung.
+- **Relatives Volumen:** 24h-Volumen im Vergleich zum Schnitt der 7 Tage davor.
+- **Ausbrüche:** Abstand zum 24h-Hoch und Ausbruch über das 7-Tage-Hoch.
+- **Bitcoin-Marktlage:** 24h-Veränderung von Bitcoin und ob Bitcoin über seiner EMA 50 liegt.
+- **Tageszeit:** Europa-, US- und späte Session.
+- **Kombinationen:** Rücksetzer im Aufwärtstrend, Ausbruch mit Volumen, Coin und Bitcoin beide im Aufwärtstrend.
+
+Einmal pro Woche vergleicht der Bot beide Varianten auf denselben unbekannten Testdaten nach Gebühren. Die erweiterte Variante wird nur genutzt, wenn sie spürbar besser abschneidet (Ergebnisse in `analyse/merkmale.csv`). Die Radar-App übernimmt die Wahl automatisch.
+
 ## Logbuch
 
 Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC. Je älter die Daten, desto gröber werden sie gespeichert:

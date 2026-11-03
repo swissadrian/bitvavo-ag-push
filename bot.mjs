@@ -31,11 +31,26 @@ function ema(a,n){const k=2/(n+1),o=[];let p;a.forEach((v,i)=>{p=i?v*k+p*(1-k):v
 function rsi(c,n=14){const o=Array(c.length).fill(50);let g=0,l=0;for(let i=1;i<c.length;i++){const d=c[i]-c[i-1],up=Math.max(d,0),dn=Math.max(-d,0);if(i<=n){g+=up;l+=dn;if(i===n){g/=n;l/=n;o[i]=100-100/(1+g/(l||1e-9))}}else{g=(g*(n-1)+up)/n;l=(l*(n-1)+dn)/n;o[i]=100-100/(1+g/(l||1e-9))}}return o}
 function boll(c,n=20,k=2){const o=Array(c.length).fill(null);let s=0,s2=0;for(let i=0;i<c.length;i++){s+=c[i];s2+=c[i]*c[i];if(i>=n){s-=c[i-n];s2-=c[i-n]*c[i-n]}if(i>=n-1){const m=s/n,sd=Math.sqrt(Math.max(0,s2/n-m*m));o[i]={m,u:m+k*sd,l:m-k*sd}}}return o}
 function atr(h,l,c,n=14){const o=Array(c.length).fill(null);let p=0;for(let i=0;i<c.length;i++){const tr=i?Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])):h[i]-l[i];if(i<n){p+=tr;if(i===n-1){p/=n;o[i]=p}}else{p=(p*(n-1)+tr)/n;o[i]=p}}return o}
+// ADX nach Wilder (Trendstärke und Richtung)
+function adx(h,l,c,n=14){const N=c.length,P=Array(N).fill(0),M=Array(N).fill(0),X=Array(N).fill(0);let sT=0,sP=0,sM=0,a=0;
+  for(let i=1;i<N;i++){const up=h[i]-h[i-1],dn=l[i-1]-l[i],pd=up>dn&&up>0?up:0,md=dn>up&&dn>0?dn:0,tr=Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));
+    if(i<=n){sT+=tr;sP+=pd;sM+=md}else{sT=sT-sT/n+tr;sP=sP-sP/n+pd;sM=sM-sM/n+md}
+    if(i>=n){const p=100*sP/(sT||1e-9),m=100*sM/(sT||1e-9),dx=100*Math.abs(p-m)/((p+m)||1e-9);P[i]=p;M[i]=m;a=i<2*n?(a*(i-n)+dx)/(i-n+1):(a*(n-1)+dx)/n;X[i]=a}}
+  return{P,M,X}}
+// Höchstwert der vorherigen w Kerzen (ohne die aktuelle)
+function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.length;i++){while(q.length&&q[0]<i-w)q.shift();o[i]=q.length?h[q[0]]:null;while(q.length&&h[q[q.length-1]]<=h[i])q.pop();q.push(i)}return o}
+// Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
+let BTCX=new Map();
+function setBtc(){BTCX=new Map();const d=data['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
 function prep(cand){
   const ts=cand.map(x=>+x[0]),o=cand.map(x=>+x[1]),h=cand.map(x=>+x[2]),l=cand.map(x=>+x[3]),c=cand.map(x=>+x[4]),v=cand.map(x=>+x[5]);
   const e12=ema(c,12),e26=ema(c,26),mm=c.map((_,i)=>e12[i]-e26[i]),ms=ema(mm,9),mh=mm.map((x,i)=>x-ms[i]);
   const B=boll(c),bw=B.map((b,i)=>b?(b.u-b.l)/b.m:null),vr=v.map((x,i)=>{if(i<20)return 1;let s=0;for(let k=i-20;k<i;k++)s+=v[k];return x/((s/20)||1e-9)});
-  return{ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr};
+  const D=DAY[TF],pv=[0],pp=[0];for(let i=0;i<c.length;i++){pv.push(pv[i]+v[i]);pp.push(pp[i]+v[i]*(h[i]+l[i]+c[i])/3)}
+  const vw=c.map((_,i)=>{const a=Math.max(0,i-D+1),sv=pv[i+1]-pv[a];return sv>0?(pp[i+1]-pp[a])/sv:c[i]});          // VWAP der letzten 24h
+  const rv=c.map((_,i)=>{if(i<8*D)return 1;const v24=pv[i+1]-pv[i+1-D],v7=(pv[i+1-D]-pv[i+1-8*D])/7;return v24/(v7||1e-9)}); // 24h-Volumen ggü. Schnitt der 7 Tage davor
+  const AX=adx(h,l,c);
+  return{ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr,vw,rv,adx:AX.X,pdi:AX.P,mdi:AX.M,hi24:priorMax(h,D),hi7:priorMax(h,7*D)};
 }
 
 /* ---------- Merkmale, aus denen das Modell lernt ---------- */
@@ -56,9 +71,27 @@ const FEATS=[
  {n:'24h-Momentum',num:1,f:(d,i)=>{const D=DAY[TF];return i<D?0:clip((d.c[i]/d.c[i-D]-1)*10,-1.5,1.5)},t:v=>'24h-Momentum '+pct(v*10)},
  {n:'Volatilität (ATR %)',num:1,f:(d,i)=>clip(d.A[i]/d.c[i]*100/3,0,2),t:v=>'Volatilität '+(v*3).toFixed(2)+'% pro Kerze'},
  {n:'Abstand zu EMA 50',num:1,f:(d,i)=>clip((d.c[i]-d.e50[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' EMA 50'},
+
+ // Erweiterung v2: VWAP, ADX, relatives Volumen, Ausbrüche, Bitcoin-Marktlage, Tageszeit, Kombinationen
+ {v2:1,n:'Abstand zum 24h-VWAP',num:1,f:(d,i)=>clip((d.c[i]-d.vw[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' dem 24h-VWAP'},
+ {v2:1,n:'Trendstärke (ADX)',num:1,f:(d,i)=>clip(d.adx[i]/50,0,1.5),t:v=>'ADX '+(v*50).toFixed(0)+': '+(v*50>=25?'kräftiger Trend':'kaum Trend')},
+ {v2:1,n:'ADX-Richtung',f:(d,i)=>d.adx[i]>=25?(d.pdi[i]>d.mdi[i]?1:-1):0,t:v=>v>0?'Starker Trend nach oben (ADX ≥ 25, +DI vorne)':'Starker Trend nach unten (ADX ≥ 25, −DI vorne)'},
+ {v2:1,n:'Relatives Volumen 24h/7T',num:1,f:(d,i)=>clip(Math.log2(d.rv[i]||1),-2,3),t:v=>'Volumen 24h '+(2**v).toFixed(1)+'× der Vorwoche'},
+ {v2:1,n:'Abstand zum 24h-Hoch',num:1,f:(d,i)=>d.hi24[i]==null?0:clip((d.c[i]-d.hi24[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>v>=0?'Über dem 24h-Hoch':'Kurs '+Math.abs(v*3).toFixed(1)+' ATR unter dem 24h-Hoch'},
+ {v2:1,n:'Ausbruch über 7-Tage-Hoch',f:(d,i)=>d.hi7[i]!=null&&d.c[i]>d.hi7[i]?1:0,t:()=>'Ausbruch über das 7-Tage-Hoch'},
+ {v2:1,n:'Bitcoin 24h',num:1,f:(d,i)=>clip(((BTCX.get(d.ts[i])||[0])[0])*10,-1.5,1.5),t:v=>'Bitcoin 24h '+pct(v*10)},
+ {v2:1,n:'Bitcoin-Trend',f:(d,i)=>(BTCX.get(d.ts[i])||[0,0])[1],t:v=>v>0?'Bitcoin über EMA 50 (Rückenwind)':'Bitcoin unter EMA 50 (Gegenwind)'},
+ {v2:1,n:'Session Europa (7–13 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=7&&h<13?1:0},t:()=>'Europa-Session'},
+ {v2:1,n:'Session USA (13–21 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=13&&h<21?1:0},t:()=>'US-Session'},
+ {v2:1,n:'Session spät (21–24 UTC)',f:(d,i)=>new Date(d.ts[i]).getUTCHours()>=21?1:0,t:()=>'Späte Session'},
+ {v2:1,n:'RSI tief im Aufwärtstrend',f:(d,i)=>d.R[i]<40&&d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]?1:0,t:(v,d,i)=>'Rücksetzer im Aufwärtstrend (RSI '+d.R[i].toFixed(0)+')'},
+ {v2:1,n:'Ausbruch mit Volumen',f:(d,i)=>d.hi24[i]!=null&&d.c[i]>d.hi24[i]&&d.vr[i]>1.5?1:0,t:(v,d,i)=>'Ausbruch über das 24h-Hoch mit '+d.vr[i].toFixed(1)+'× Volumen'},
+ {v2:1,n:'Coin und Bitcoin im Aufwärtstrend',f:(d,i)=>d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]&&(BTCX.get(d.ts[i])||[0,0])[1]>0?1:0,t:()=>'Coin und Bitcoin beide im Aufwärtstrend'},
 ];
-const K=FEATS.length;
-const feat=(d,i)=>FEATS.map(F=>F.f(d,i));
+// Welche Merkmale aktiv sind, entscheidet der wöchentliche Vergleich des Bots (v1 = bisher, v2 = erweitert)
+let FEATSET='v1',ACTIVE=FEATS.filter(F=>!F.v2),K=ACTIVE.length;
+function setFeatSet(s){FEATSET=s==='v2'?'v2':'v1';ACTIVE=FEATSET==='v2'?FEATS:FEATS.filter(F=>!F.v2);K=ACTIVE.length}
+const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
 function outcome(d,i){
@@ -72,7 +105,7 @@ function outcomeG(d,i,g){
 }
 
 /* ---------- Lernen: logistische Regression ---------- */
-function fit(X,y,n,iters=160){
+function fit(X,y,n,iters=160,K=ACTIVE.length){
   const mu=new Float64Array(K),sd=new Float64Array(K);
   for(let i=0;i<n;i++)for(let k=0;k<K;k++)mu[k]+=X[i*K+k];for(let k=0;k<K;k++)mu[k]/=n;
   for(let i=0;i<n;i++)for(let k=0;k<K;k++)sd[k]+=(X[i*K+k]-mu[k])**2;for(let k=0;k<K;k++)sd[k]=Math.sqrt(sd[k]/n)||1;
@@ -84,7 +117,7 @@ function fit(X,y,n,iters=160){
     b-=lr*gb/n;for(let k=0;k<K;k++)w[k]-=lr*(g[k]/n+lam*w[k]);}
   return{w:Array.from(w),b,mu:Array.from(mu),sd:Array.from(sd),base};
 }
-function predict(m,x){let s=m.b;for(let k=0;k<K;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
+function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
 function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
 async function trainModel(){
@@ -119,7 +152,7 @@ function calib(p){const a=model.allP;let lo=0,hi=a.length;while(lo<hi){const m=(
 function analyze(m,d){
   const N=d.c.length-1,last=d.c[N],x=feat(d,N),p=predict(model,x),cal=calib(p),ev=cal.r;
   const ct=contrib(model,x),reasons=[];
-  FEATS.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
+  ACTIVE.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
   reasons.sort((a,b)=>Math.abs(b[0])-Math.abs(a[0]));
   const lb=SRBARS[TF],sup=Math.min(...d.l.slice(-lb)),res=Math.max(...d.h.slice(-lb)),a=d.A[N];
   const R=riskOf(last,a),stop=last-R,t1=last+GEO.tp*R,t2=Math.max(res,last+(GEO.tp+1)*R);
@@ -309,7 +342,7 @@ async function geoAnalysis(){
   fs.mkdirSync(LOG+'/analyse',{recursive:true});
   fs.writeFileSync(LOG+'/analyse/geometrie.csv',['stop_atr,min_risiko_pct,ziel_r,haltedauer_h,erwartung_alle_r,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,anzahl_top10',
     ...res.map(r=>[r.sl,r.minRisk*100,r.tp,r.h,r.base_r.toFixed(3),r.top10_r.toFixed(3),r.top10_win.toFixed(3),r.top20_r.toFixed(3),r.top10_n].join(','))].join('\n')+'\n');
-  fs.writeFileSync(LOG+'/analyse/aktuell.json',JSON.stringify({geo:st.geo,gemessen:new Date().toISOString(),zeiteinheit:TF,tage_daten:days,beispiele:n,
+  fs.writeFileSync(LOG+'/analyse/aktuell.json',JSON.stringify({merkmale:st.featSet||'v1',geo:st.geo,gemessen:new Date().toISOString(),zeiteinheit:TF,tage_daten:days,beispiele:n,
     erwartung_top10_r:+best.top10_r.toFixed(3),trefferquote_top10:+best.top10_win.toFixed(3),gebuehr_pro_seite:FEE},null,1));
   console.log(`Aufbau-Analyse (${res.length} Varianten, ${((Date.now()-t0)/1000).toFixed(0)} s): bester Aufbau Stop ${best.sl} ATR / min ${best.minRisk*100}%, Ziel ${best.tp} R, ${best.h} h → Top-10 % ${fmtR(best.top10_r)}`);
   if(best.top10_r<=0)await push('Kein Vorteil nach Gebühren','Auch der beste getestete Trade-Aufbau verliert nach Gebühren im Schnitt. Bis sich das ändert, kommen kaum Kauf-Signale.',3,'warning');
@@ -340,6 +373,29 @@ function retro(){
   console.log(`Rückblick: ${rows.length} Coins mit ±10 % in 24h ausgewertet.`);
 }
 
+/* ---------- Bisherige gegen erweiterte Merkmale: wöchentlicher Vergleich auf unbekannten Testdaten ---------- */
+async function featureAB(){
+  const t0=Date.now();setFeatSet('v2');
+  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars();
+  for(const d of Object.values(data))for(let i=210;i<d.c.length-hb;i++)if(d.A[i]){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
+  if(S.length<2000){setFeatSet(st.featSet||'v1');return console.log('Zu wenig Daten für den Merkmal-Vergleich.')}
+  S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75);
+  const score=cols=>{const k=cols.length,X=new Float64Array(n*k),Y=new Float64Array(n);
+    S.forEach((s,i)=>{cols.forEach((c,j)=>X[i*k+j]=s.x[c]);Y[i]=s.y});
+    const m=fit(X,Y,cut,120,k),t=[];for(let i=cut;i<n;i++)t.push([predict(m,cols.map(c=>S[i].x[c])),S[i].r,S[i].y]);t.sort((a,b)=>b[0]-a[0]);
+    const top=f=>{const q=t.slice(0,Math.max(1,Math.floor(t.length*f)));return{r:q.reduce((s,x)=>s+x[1],0)/q.length,w:q.reduce((s,x)=>s+x[2],0)/q.length}};
+    const a=top(.1),b=top(.2);return{top10_r:a.r,top10_win:a.w,top20_r:b.r,score:(a.r+b.r)/2}};
+  const A=score(v1),B=score(FEATS.map((_,k)=>k));
+  const win=B.score>A.score+0.01?'v2':'v1';st.featSet=win;st.featAt=Date.now();setFeatSet(win);
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});
+  const f=LOG+'/analyse/merkmale.csv',head='datum_utc,variante,anzahl_merkmale,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,gewaehlt';
+  const old=fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').slice(1):[];const d=iso(Date.now());
+  fs.writeFileSync(f,[head,...old,[d,'bisher',v1.length,A.top10_r.toFixed(3),A.top10_win.toFixed(3),A.top20_r.toFixed(3),win==='v1'?'ja':'nein'].join(','),[d,'erweitert',all,B.top10_r.toFixed(3),B.top10_win.toFixed(3),B.top20_r.toFixed(3),win==='v2'?'ja':'nein'].join(',')].join('\n')+'\n');
+  const af=LOG+'/analyse/aktuell.json';let ak={};try{ak=JSON.parse(fs.readFileSync(af,'utf8'))}catch(e){}
+  fs.writeFileSync(af,JSON.stringify({...ak,geo:st.geo||ak.geo,merkmale:win,merkmale_vergleich:{bisher:+A.score.toFixed(3),erweitert:+B.score.toFixed(3),gemessen:new Date().toISOString()}},null,1));
+  console.log(`Merkmal-Vergleich (${((Date.now()-t0)/1000).toFixed(0)} s, ${n} Beispiele): bisher ${fmtR(A.score)}, erweitert ${fmtR(B.score)} → ${win==='v2'?'erweitert':'bisher'}`);
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -355,7 +411,10 @@ async function main(){
   console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
   if(st.geo)GEO={...GEO,...st.geo};
+  setFeatSet(st.featSet||'v1');setBtc();
   if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis();
+  if(!st.featAt||Date.now()-st.featAt>7*DAY_MS)await featureAB();
+  setFeatSet(st.featSet||'v1');
   await trainModel();
   console.log(`Modell: ${model.n} Signale, Basis ${(model.baseWin*100).toFixed(0)}%, Top-10% ${(model.top.win*100).toFixed(0)}%`);
   markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
