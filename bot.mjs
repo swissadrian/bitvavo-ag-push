@@ -1,6 +1,9 @@
-// Bitvavo Signal-Bot: prüft alle EUR-Märkte mit > 250k € Volumen, lernt aus dem Kursverlauf
-// und schickt Kauf- und Verkaufssignale per ntfy aufs Handy. Gleiche Logik wie die Radar-App.
+// Bitvavo Signal-Bot: prüft alle EUR-Märkte mit > 250k € Volumen, lernt aus dem Kursverlauf,
+// schickt Kauf- und Verkaufssignale per ntfy und führt ein Logbuch. Gleiche Logik wie die Radar-App.
 import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
 const MIN_VOL=250000;
@@ -8,7 +11,7 @@ const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstan
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const HOR={'15m':16,'1h':8,'4h':6};        // Haltedauer im Backtest: 4h / 8h / 24h
 const TFMS={'15m':9e5,'1h':36e5,'4h':144e5};
-let TPm=1.5, SLm=1;                       // Ziel +1,5 ATR, Stop −1 ATR
+const TPm=1.5, SLm=1, FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)                       // Ziel +1,5 ATR, Stop −1 ATR
 const HIST=1000, RETRAIN_MS=30*60e3;
 
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -52,8 +55,9 @@ const feat=(d,i)=>FEATS.map(F=>F.f(d,i));
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
 function outcome(d,i){
   const e=d.c[i],a=d.A[i],tp=e+TPm*a,sl=e-SLm*a,H=HOR[TF];
-  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1};if(d.h[k]>=tp)return{y:1,r:TPm}}
-  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/(SLm*a)};
+  const fee=2*FEE*e/(SLm*a); // Bitvavo-Gebühr für Kauf und Verkauf, in R
+  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1-fee};if(d.h[k]>=tp)return{y:1,r:TPm-fee}}
+  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/(SLm*a)-fee};
 }
 
 /* ---------- Lernen: logistische Regression ---------- */
@@ -118,45 +122,26 @@ let TF=process.env.TF||'1h', markets=[], data={}, results={}, model=null, lastTr
 const setStat=t=>console.log(t), tick=async()=>{};
 
 const TOPIC=(process.env.NTFY_TOPIC||'').trim();
-const LEVEL=+(process.env.MIN_LEVEL||2);               // 2 = nur Starker Kauf, 1 = ab Kauf
-let POS=[];
-try{POS=JSON.parse(process.env.POSITIONS||'[]')}catch(e){console.error('POSITIONS ist kein gültiges JSON:',e.message)}
-POS=POS.map(p=>({m:(p.coin||p.market||'').toUpperCase().replace(/-EUR$/,'')+'-EUR',buy:+p.buy,qty:p.qty?+p.qty:null})).filter(p=>p.buy>0);
-const STATE='state/state.json';
-let st={notified:{},pos:{},ok:true};
-try{st={...st,...JSON.parse(fs.readFileSync(STATE,'utf8'))}}catch(e){console.log('Kein gespeicherter Zustand, erster Lauf.')}
+const CMD=TOPIC?TOPIC+'-cmd':'';                         // Kanal für Kauf/Verkauf-Eingaben aus der App
+const LEVEL=+(process.env.MIN_LEVEL||2);                 // 2 = nur Starker Kauf, 1 = ab Kauf
+const LOG=process.env.LOG_DIR||'logdata', T0=Date.now();
+const DAY_MS=864e5, FULL_DAYS=365, KEEP_YEARS=3;
 
-/* ---------- Logbuch (Branch "logs", ältere Daten als 3 Jahre werden gelöscht) ---------- */
-const LOG=process.env.LOG_DIR||'', KEEP_YEARS=3, T0=Date.now();
-const iso=d=>d.toISOString().slice(0,19).replace('T',' ');
-const csvq=v=>{v=v==null?'':String(v);return /[",\n;]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
-function appendCsv(rel,header,rows){
-  if(!LOG||!rows.length)return;const f=LOG+'/'+rel;fs.mkdirSync(f.slice(0,f.lastIndexOf('/')),{recursive:true});
-  if(!fs.existsSync(f))fs.writeFileSync(f,header.join(',')+'\n');
-  fs.appendFileSync(f,rows.map(r=>r.map(csvq).join(',')).join('\n')+'\n');
+/* ---------- Zustand: verschlüsselt im Logbuch (nur mit deinem ntfy-Kanal lesbar) ---------- */
+const STATE_FILE=LOG+'/zustand.enc';
+const KEY=TOPIC?crypto.scryptSync(TOPIC,'bitvavo-ag-push',32):null;
+let st={notified:{},pos:{},ok:true,cmdSince:null,last3m:{},closed:[]};
+function loadState(){
+  if(!KEY||!fs.existsSync(STATE_FILE))return console.log('Kein gespeicherter Zustand, erster Lauf.');
+  try{const b=Buffer.from(fs.readFileSync(STATE_FILE,'utf8'),'base64'),iv=b.subarray(0,12),tag=b.subarray(12,28);
+    const dc=crypto.createDecipheriv('aes-256-gcm',KEY,iv);dc.setAuthTag(tag);
+    st={...st,...JSON.parse(Buffer.concat([dc.update(b.subarray(28)),dc.final()]).toString('utf8'))}}
+  catch(e){console.warn('Zustand nicht lesbar (anderer ntfy-Kanal?), starte neu:',e.message)}
 }
-function prune(){
-  if(!LOG||!fs.existsSync(LOG))return;
-  const cut=new Date();cut.setUTCFullYear(cut.getUTCFullYear()-KEEP_YEARS);let n=0;
-  const walk=dir=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){if(e.name.startsWith('.'))continue;const p=dir+'/'+e.name;
-    if(e.isDirectory()){walk(p);if(!fs.readdirSync(p).length)fs.rmdirSync(p);continue}
-    const m=e.name.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?\.csv$/);if(!m)continue;
-    const end=m[3]?new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+1)):new Date(Date.UTC(+m[1],+m[2],1));
-    if(end<cut){fs.unlinkSync(p);n++}}};
-  walk(LOG);if(n)console.log(`${n} Logdateien älter als ${KEEP_YEARS} Jahre gelöscht.`);
-}
-function writeLogs(buys){
-  if(!LOG)return;const now=new Date(),day=now.toISOString().slice(0,10),mon=day.slice(0,7),t=iso(now);
-  const all=Object.values(results);
-  appendCsv(`laeufe/${mon}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden_verkaufen','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
-    [[t,TF,markets.filter(m=>m.vol>=MIN_VOL).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((Date.now()-T0)/1000).toFixed(0)]]);
-  // Voller Marktschnappschuss einmal pro Stunde
-  const hour=now.toISOString().slice(0,13);
-  if(st.lastSnap!==hour){st.lastSnap=hour;
-    appendCsv(`markt/${day.slice(0,4)}/${day}.csv`,['zeit_utc','markt','preis_eur','volumen_24h_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'],
-      markets.filter(m=>results[m.market]&&m.vol>=MIN_VOL).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));}
-  // Gesendete Kauf-Signale (Verkaufsmeldungen nicht, die verraten deine Positionen)
-  appendCsv(`meldungen/${mon}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
+function saveState(){
+  if(!KEY)return;fs.mkdirSync(LOG,{recursive:true});
+  const iv=crypto.randomBytes(12),c=crypto.createCipheriv('aes-256-gcm',KEY,iv),ct=Buffer.concat([c.update(JSON.stringify(st),'utf8'),c.final()]);
+  fs.writeFileSync(STATE_FILE,Buffer.concat([iv,c.getAuthTag(),ct]).toString('base64'));
 }
 
 async function j(url,tries=3){for(let t=0;t<tries;t++){try{const r=await fetch(url);if(r.ok)return r.json();if(r.status<500&&r.status!==429)throw new Error(url.split('?')[0]+' → '+r.status)}catch(e){if(t===tries-1)throw e}await new Promise(r=>setTimeout(r,1500*(t+1)))}throw new Error(url+' nicht erreichbar')}
@@ -168,23 +153,117 @@ async function push(title,message,prio=4,tag='chart_with_upwards_trend'){
   if(!r.ok)console.warn('ntfy',r.status,await r.text());
 }
 
-function advice(p,last){
-  const r=results[p.m],a=r?r.d.A[r.d.c.length-1]:last*0.02,s=st.pos[p.m];
-  const pnl=(last/p.buy-1)*100,eur=p.qty?(last-p.buy)*p.qty:null;
-  const trail=s.high>=p.buy+a?s.high-2*a:-Infinity,eff=Math.max(s.tpHit?Math.max(s.stop,p.buy):s.stop,trail),o={pnl,eur,eff,last};
-  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
-  if(last>=s.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(s.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
-  if(r&&r.sig[0]<=-1)return{...o,act:'signal',label:'Verkaufen',why:`Modell sieht keinen Vorteil mehr (${fmtR(r.ev)} pro Trade)`};
-  if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',why:`RSI ${r.rsi.toFixed(0)} stark überkauft`};
-  return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} €, Ziel ${fmtP(s.tp)} €`};
+/* ---------- Kauf/Verkauf-Eingaben: aus der Radar-App oder per Text in ntfy ---------- */
+const num=s=>parseFloat(String(s).replace(/['’\s]/g,'').replace(',','.'));
+const confirmations=[];
+async function readCommands(){
+  if(!CMD)return;
+  const since=st.cmdSince||'12h';
+  const r=await fetch(`https://ntfy.sh/${CMD}/json?poll=1&since=${encodeURIComponent(since)}`);
+  if(!r.ok)return console.warn('ntfy-Befehle',r.status);
+  const msgs=(await r.text()).split('\n').filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(m=>m&&m.event==='message');
+  for(const m of msgs){
+    st.cmdSince=m.id;const t=(m.message||'').trim();let x;
+    if(x=t.match(/^(kauf|kaufen|gekauft|buy)\s+([a-z0-9]+)(?:-eur)?\s+([\d'.,]+)(?:\s+([\d'.,]+))?/i)){
+      const mk=x[2].toUpperCase()+'-EUR',buy=num(x[3]),qty=x[4]?num(x[4]):null;
+      if(buy>0){st.pos[mk]={buy,qty,t:m.time*1000};delete st.notified['s:'+mk];confirmations.push({kind:'add',mk})}
+    }else if(x=t.match(/^(verkauf|verkaufen|verkauft|sell)\s+([a-z0-9]+)(?:-eur)?(?:\s+([\d'.,]+))?/i)){
+      const mk=x[2].toUpperCase()+'-EUR',p=st.pos[mk];
+      if(p){const sell=x[3]?num(x[3]):null;st.closed.push({m:mk,buy:p.buy,sell,t:p.t,end:m.time*1000});st.closed=st.closed.slice(-200);
+        delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy})}
+      else confirmations.push({kind:'unknown',mk});
+    }else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
+    else confirmations.push({kind:'help',t});
+  }
 }
 
+function advice(mk,p,last){
+  const r=results[mk],a=r?r.d.A[r.d.c.length-1]:last*0.02;
+  const pnl=(last/p.buy-1)*100,eur=p.qty?(last-p.buy)*p.qty:null;
+  const trail=p.high>=p.buy+a?p.high-2*a:-Infinity,eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail),o={pnl,eur,eff,last};
+  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
+  if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
+  if(r&&r.sig[0]<=-1)return{...o,act:'signal',label:'Verkaufen',why:`Modell sieht keinen Vorteil mehr (${fmtR(r.ev)} pro Trade)`};
+  if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',why:`RSI ${r.rsi.toFixed(0)} stark überkauft`};
+  return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} €, Ziel ${fmtP(p.tp)} €`};
+}
+
+/* ---------- Logbuch ---------- */
+const iso=ts=>new Date(ts).toISOString().slice(0,16).replace('T',' ');
+const dayOf=ts=>new Date(ts).toISOString().slice(0,10);
+const csvq=v=>{v=v==null?'':String(v);return /[",\n;]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+function appendCsv(rel,header,rows){
+  if(!rows.length)return;const f=LOG+'/'+rel;fs.mkdirSync(path.dirname(f),{recursive:true});
+  if(!fs.existsSync(f))fs.writeFileSync(f,header.join(',')+'\n');
+  fs.appendFileSync(f,rows.map(r=>r.map(csvq).join(',')).join('\n')+'\n');
+}
+const H3=['zeit_utc','markt','open','high','low','close','volumen'];
+const HS=['zeit_utc','markt','preis_eur','volumen_24h_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'];
+// 1-Minuten-Kerzen von Bitvavo zu 3-Minuten-Werten zusammenfassen
+async function log3m(){
+  const now=Date.now(),rows={};
+  await pool(markets.filter(m=>m.vol>=MIN_VOL),5,async m=>{
+    const last=st.last3m[m.market]||now-60*60e3;
+    const lim=Math.round(clip((now-last)/60e3+6,10,1440));
+    const c=(await j(`${API}/${m.market}/candles?interval=1m&limit=${lim}`)).slice().reverse();
+    const b=new Map();
+    for(const k of c){const ts=+k[0],s=Math.floor(ts/18e4)*18e4;if(s<=last||s+18e4>now-30e3)continue;
+      const x=b.get(s);if(!x)b.set(s,[s,+k[1],+k[2],+k[3],+k[4],+k[5]]);else{x[2]=Math.max(x[2],+k[2]);x[3]=Math.min(x[3],+k[3]);x[4]=+k[4];x[5]+=+k[5]}}
+    for(const x of [...b.values()].sort((a,b)=>a[0]-b[0])){const d=dayOf(x[0]);(rows[d]||(rows[d]=[])).push([iso(x[0]),m.market,x[1],x[2],x[3],x[4],+x[5].toFixed(8)]);st.last3m[m.market]=x[0]}
+  });
+  let n=0;for(const d of Object.keys(rows).sort()){rows[d].sort((a,b)=>a[0]<b[0]?-1:1);appendCsv(`kurse/3min/${d.slice(0,4)}/${d}.csv`,H3,rows[d]);n+=rows[d].length}
+  console.log(`${n} neue 3-Minuten-Werte geloggt.`);
+}
+function logRun(buys){
+  const now=Date.now(),d=dayOf(now),t=iso(now),all=Object.values(results);
+  appendCsv(`signale/${d.slice(0,4)}/${d}.csv`,HS,markets.filter(m=>results[m.market]&&m.vol>=MIN_VOL).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
+  appendCsv(`laeufe/${d.slice(0,7)}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden_verkaufen','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
+    [[t,TF,markets.filter(m=>m.vol>=MIN_VOL).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((now-T0)/1000).toFixed(0)]]);
+  appendCsv(`meldungen/${d.slice(0,7)}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
+}
+/* Aufräumen: abgeschlossene Tage packen, nach 1 Jahr auf Stundenwerte verdichten, nach 3 Jahren löschen */
+function files(dir){const out=[];if(!fs.existsSync(dir))return out;for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=dir+'/'+e.name;if(e.isDirectory())out.push(...files(p));else out.push(p)}return out}
+function readCsv(p){const t=p.endsWith('.gz')?zlib.gunzipSync(fs.readFileSync(p)).toString('utf8'):fs.readFileSync(p,'utf8');const [h,...r]=t.trim().split('\n');return{h,rows:r}}
+function housekeeping(){
+  const today=dayOf(Date.now()),cutFull=dayOf(Date.now()-FULL_DAYS*DAY_MS),cutAll=new Date();cutAll.setUTCFullYear(cutAll.getUTCFullYear()-KEEP_YEARS);
+  const cutAllDay=dayOf(cutAll),cutAllMon=cutAllDay.slice(0,7);let packed=0,thinned=0,deleted=0;
+  for(const p of files(LOG)){
+    if(p.includes('/.git/'))continue;
+    const m=path.basename(p).match(/^(\d{4}-\d{2})(-\d{2})?\.csv(\.gz)?$/);if(!m)continue;
+    const day=m[2]?m[1]+m[2]:null;
+    // 3 Jahre: alles löschen
+    if(day?day<cutAllDay:m[1]<cutAllMon){fs.unlinkSync(p);deleted++;continue}
+    if(!day)continue;
+    // Nach 1 Jahr: nur noch Stundenwerte
+    if(day<cutFull&&(p.includes('/kurse/3min/')||p.includes('/signale/'))){
+      const {h,rows}=readCsv(p),hourly=new Map();
+      if(p.includes('/kurse/3min/')){for(const r of rows){const c=r.split(','),k=c[0].slice(0,13)+':00|'+c[1],x=hourly.get(k);
+          if(!x)hourly.set(k,[c[0].slice(0,13)+':00',c[1],+c[2],+c[3],+c[4],+c[5],+c[6]]);else{x[3]=Math.max(x[3],+c[3]);x[4]=Math.min(x[4],+c[4]);x[5]=+c[5];x[6]+=+c[6]}}
+        const out=[...hourly.values()].map(x=>{x[6]=+x[6].toFixed(8);return x.join(',')});
+        const dest=p.replace('/kurse/3min/','/kurse/1h/');fs.mkdirSync(path.dirname(dest),{recursive:true});
+        fs.writeFileSync(dest.endsWith('.gz')?dest:dest+'.gz',zlib.gzipSync([h,...out].join('\n')+'\n',{level:9}));}
+      else{for(const r of rows){const k=r.slice(0,13)+'|'+r.split(',')[1];if(!hourly.has(k))hourly.set(k,r)}
+        const dest=p.replace('/signale/','/signale-1h/');fs.mkdirSync(path.dirname(dest),{recursive:true});
+        fs.writeFileSync(dest.endsWith('.gz')?dest:dest+'.gz',zlib.gzipSync([h,...hourly.values()].join('\n')+'\n',{level:9}));}
+      fs.unlinkSync(p);thinned++;
+    continue;
+    }
+    // Abgeschlossene Tage komprimieren
+    if(!m[3]&&day<today){fs.writeFileSync(p+'.gz',zlib.gzipSync(fs.readFileSync(p),{level:9}));fs.unlinkSync(p);packed++;continue}
+  }
+  const prune=d=>{if(!fs.existsSync(d))return;for(const e of fs.readdirSync(d,{withFileTypes:true}))if(e.isDirectory()&&e.name!=='.git'){prune(d+'/'+e.name);if(!fs.readdirSync(d+'/'+e.name).length)fs.rmdirSync(d+'/'+e.name)}};prune(LOG);
+  if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Tage gepackt, ${thinned} auf Stundenwerte verdichtet, ${deleted} älter als ${KEEP_YEARS} Jahre gelöscht.`);
+}
+
+/* ---------- Hauptlauf ---------- */
 async function main(){
+  await readCommands().catch(e=>console.warn('Befehle',e.message));
   const t=await j(API+'/ticker/24h');
   const tick24=Object.fromEntries(t.map(x=>[x.market,x]));
-  markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||POS.some(p=>p.m===x.market)))
+  markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
-  console.log(`${markets.length} Märkte, Zeiteinheit ${TF}`);
+  console.log(`${markets.length} Märkte, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
+  await log3m().catch(e=>console.warn('3-Minuten-Log',e.message));
   await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows)});
   await trainModel();
   console.log(`Modell: ${model.n} Signale, Basis ${(model.baseWin*100).toFixed(0)}%, Top-10% ${(model.top.win*100).toFixed(0)}%`);
@@ -195,27 +274,36 @@ async function main(){
     const key='b:'+m.market+':'+TF,on=r.sig[0]>=LEVEL,prev=st.notified[key];
     if(on&&!(prev&&prev.s))buys.push({t:`${r.sig[1]}: ${m.base} (${TF})`,b:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.p*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,ev:r.ev});
     st.notified[key]={s:on,t:now}}
-  for(const p of POS){const tk=tick24[p.m];if(!tk){console.warn('Kein Kurs für',p.m);continue}
-    const last=+tk.last,a=results[p.m]?results[p.m].d.A.at(-1):last*0.02;
-    const s=st.pos[p.m];if(!s||s.buy!==p.buy)st.pos[p.m]={buy:p.buy,stop:p.buy-1.5*a,tp:p.buy+2*a,high:Math.max(p.buy,last),tpHit:false};
-    st.pos[p.m].high=Math.max(st.pos[p.m].high,last);
-    const adv=advice(p,last);if(last>=st.pos[p.m].tp)st.pos[p.m].tpHit=true;
-    const key='s:'+p.m,prev=st.notified[key];
-    console.log(`Position ${p.m}: ${adv.label} (${pct(adv.pnl)})`);
-    if(adv.act!=='hold'&&!(prev&&prev.s===adv.act))sells.push({t:`${adv.label}: ${p.m.replace('-EUR','')}`,b:`${adv.why}. ${pct(adv.pnl)} seit Kauf${adv.eur!=null?` (${adv.eur>=0?'+':''}${adv.eur.toFixed(2)} €)`:''}, Kurs ${fmtP(last)} €`});
+  for(const [mk,p] of Object.entries(st.pos)){const tk=tick24[mk];if(!tk){console.warn('Kein Kurs für',mk);continue}
+    const last=+tk.last,a=results[mk]?results[mk].d.A.at(-1):last*0.02;
+    if(p.stop==null){p.stop=p.buy-1.5*a;p.tp=p.buy+2*a;p.high=Math.max(p.buy,last);p.tpHit=false}
+    p.high=Math.max(p.high,last);
+    const adv=advice(mk,p,last);if(last>=p.tp)p.tpHit=true;
+    const key='s:'+mk,prev=st.notified[key];
+    console.log(`Position ${mk}: ${adv.label} (${pct(adv.pnl)})`);
+    if(adv.act!=='hold'&&!(prev&&prev.s===adv.act))sells.push({t:`${adv.label}: ${mk.replace('-EUR','')}`,b:`${adv.why}. ${pct(adv.pnl)} seit Kauf${adv.eur!=null?` (${adv.eur>=0?'+':''}${adv.eur.toFixed(2)} €)`:''}, Kurs ${fmtP(last)} €`});
     st.notified[key]={s:adv.act,t:now}}
-  for(const k of Object.keys(st.pos))if(!POS.some(p=>p.m===k)){delete st.pos[k];delete st.notified['s:'+k]}
 
+  for(const c of confirmations){const b=c.mk?.replace('-EUR','');
+    if(c.kind==='add'){const p=st.pos[c.mk];await push(`Kauf eingetragen: ${b}`,`Kaufpreis ${fmtP(p.buy)} €${p.qty?`, Menge ${p.qty}`:''}. Stop ${fmtP(p.stop)} €, Ziel ${fmtP(p.tp)} €. Ich melde mich, sobald du verkaufen solltest.`,3,'white_check_mark')}
+    else if(c.kind==='del')await push(`Verkauf eingetragen: ${b}`,c.sell?`Ergebnis ${pct((c.sell/c.buy-1)*100)} (Kauf ${fmtP(c.buy)} €, Verkauf ${fmtP(c.sell)} €).`:'Position entfernt.',3,'white_check_mark');
+    else if(c.kind==='unknown')await push(`${b} nicht im Bestand`,'Zu diesem Coin ist kein Kauf eingetragen.',2,'grey_question');
+    else if(c.kind==='list'){const L=Object.entries(st.pos);await push('Deine Positionen',L.length?L.map(([mk,p])=>{const last=+(tick24[mk]?.last||0);return `${mk.replace('-EUR','')}: ${pct((last/p.buy-1)*100)} · ${advice(mk,p,last).label}`}).join('\n'):'Keine Positionen eingetragen.',2,'clipboard')}
+    else await push('Befehl nicht verstanden',`«${c.t.slice(0,60)}». Beispiele: «kauf BTC 61500 0.02», «verkauf BTC 63000», «liste».`,2,'grey_question');
+  }
   for(const s of sells)await push(s.t,s.b,5,'warning');
   buys.sort((a,b)=>b.ev-a.ev);
   for(const b of buys.slice(0,4))await push(b.t,b.b,4);
   if(buys.length>4)await push(`${buys.length-4} weitere Kauf-Signale`,buys.slice(4).map(b=>b.t.split(': ')[1]).join(', '),3);
   if(!st.ok)await push('Bitvavo-Bot läuft wieder','Daten werden wieder normal abgerufen.',2,'white_check_mark');
   st.ok=true;
-  writeLogs(buys);
-  console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen.`);
+  logRun(buys);
+  console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
 
+loadState();
+// Optional: Positionen weiterhin auch per Secret POSITIONS
+try{for(const p of JSON.parse(process.env.POSITIONS||'[]')){const mk=(p.coin||'').toUpperCase().replace(/-EUR$/,'')+'-EUR';if(+p.buy>0&&!st.pos[mk])st.pos[mk]={buy:+p.buy,qty:p.qty?+p.qty:null,t:Date.now()}}}catch(e){}
 try{await main()}
 catch(e){console.error(e);if(st.ok)await push('Bitvavo-Bot: Fehler',String(e.message||e).slice(0,200),3,'x');st.ok=false;process.exitCode=1}
-finally{try{prune()}catch(e){console.warn('Aufräumen',e.message)}fs.mkdirSync('state',{recursive:true});fs.writeFileSync(STATE,JSON.stringify(st))}
+finally{try{housekeeping()}catch(e){console.warn('Aufräumen',e.message)}saveState()}

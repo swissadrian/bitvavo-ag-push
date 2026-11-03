@@ -15,21 +15,13 @@ concurrency:
 jobs:
   pruefen:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 9
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # Merkt sich zwischen den Läufen, was schon gemeldet wurde (privat, nicht im Repo)
-      - name: Zustand laden
-        uses: actions/cache/restore@v4
-        with:
-          path: state
-          key: state-${{ github.run_id }}
-          restore-keys: state-
 
       - name: Logbuch holen
         env:
@@ -49,14 +41,7 @@ jobs:
           LOG_DIR: logdata
         run: node bot.mjs
 
-      - name: Zustand speichern
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: state
-          key: state-${{ github.run_id }}
-
-      # Logbuch als einzelner Commit ohne Verlauf speichern: gelöschte Daten belegen danach keinen Platz mehr
+      # Logbuch inkl. verschlüsseltem Zustand als einzelner Commit ohne Verlauf speichern: gelöschte Daten belegen danach keinen Platz mehr
       - name: Logbuch speichern
         if: always()
         working-directory: logdata

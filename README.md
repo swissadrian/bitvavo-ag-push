@@ -5,39 +5,52 @@ Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 250'000 € Volu
 - bei jedem **neuen** Kauf-Signal (Standard: nur «Starker Kauf»)
 - bei Verkaufsempfehlungen für deine Coins: Stop erreicht, Ziel erreicht, Modell negativ, stark überkauft
 
-Jedes Signal wird nur einmal gemeldet. Ändert es sich, kommt eine neue Meldung.
+Die Bitvavo-Gebühr (0,25 % pro Kauf und Verkauf) ist im Lernmodell eingerechnet. Jedes Signal wird nur einmal gemeldet. Ändert es sich, kommt eine neue Meldung.
 
 ## Einrichten
 
 1. Lege auf github.com ein neues Repository an, zum Beispiel `bitvavo-bot`. Wähle **Public**: GitHub Actions ist für öffentliche Repositories unbegrenzt gratis. Deine Positionen und dein ntfy-Kanal liegen in Secrets und sind für niemanden sichtbar.
 2. Lade die Dateien hoch: `bot.mjs`, `README.md` und `.github/workflows/signale.yml`. Der Ordnerpfad muss genau so heissen.
-3. Gehe zu **Settings → Secrets and variables → Actions → New repository secret** und lege zwei Secrets an:
-   - `NTFY_TOPIC`: dein ntfy-Kanal (geheim halten)
-   - `POSITIONS`: deine gehaltenen Coins als JSON, zum Beispiel
-     `[{"coin":"BTC","buy":61500,"qty":0.02},{"coin":"SOL","buy":142.3}]`
-     Die Menge `qty` ist optional. Ohne Coins: `[]`
+3. Gehe zu **Settings → Secrets and variables → Actions → New repository secret** und lege das Secret `NTFY_TOPIC` an: dein ntfy-Kanal (geheim halten). Mehr braucht es nicht. Deine Käufe trägst du über die App oder ntfy ein (siehe unten).
 4. Optional unter dem Reiter **Variables**:
    - `TF`: `15m`, `1h` (Standard) oder `4h`
    - `MIN_LEVEL`: `2` = nur Starker Kauf (Standard), `1` = ab Kauf
 5. Starte den Bot im Tab **Actions** über «Bitvavo Signale» → **Run workflow** einmal von Hand. Danach läuft er automatisch alle 5 Minuten.
 
+## Käufe und Verkäufe eintragen (ohne Secret)
+
+Der Bot liest deine Käufe über den ntfy-Kanal `<dein Kanal>-cmd`. Zwei Wege:
+
+- **Radar-App:** Im Coin auf «Als gekauft eintragen» oder «Verkauf eintragen» tippen. Die App schickt das automatisch an den Bot, sofern dort derselbe ntfy-Kanal eingetragen ist.
+- **ntfy-App:** Den Kanal `<dein Kanal>-cmd` abonnieren und eine Nachricht senden:
+  - `kauf BTC 61500 0.02` (Coin, Kaufpreis, Menge optional)
+  - `verkauf BTC 63000` (Verkaufspreis optional)
+  - `liste` zeigt alle Positionen mit aktueller Empfehlung
+
+Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push. Stop und Ziel berechnet er aus der Volatilität. Danach meldet er sich, wenn du verkaufen solltest. Ab dann sichert ein nachlaufender Stop deine Gewinne.
+
+Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.enc`). Schlüssel ist dein ntfy-Kanal: Ohne ihn kann niemand die Datei lesen. Änderst du den Kanal, beginnt der Bot mit leerem Bestand.
+
 ## Logbuch
 
-Jeder Lauf schreibt Daten in den Branch **logs** (umschalten oben links von «main» auf «logs»):
+Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC.
 
-| Ordner | Inhalt | Häufigkeit |
-|---|---|---|
-| `markt/JJJJ/JJJJ-MM-TT.csv` | Alle Märkte: Preis, Volumen, RSI, Trefferwahrscheinlichkeit, Erwartung, Signal | stündlich |
-| `laeufe/JJJJ-MM.csv` | Zusammenfassung pro Lauf: Anzahl Signale, Modellqualität, BTC-Preis, Laufzeit | alle 5 Minuten |
-| `meldungen/JJJJ-MM.csv` | Gesendete Kauf-Signale | bei jeder Meldung |
+| Ordner | Inhalt | Auflösung | Aufbewahrung |
+|---|---|---|---|
+| `kurse/3min/` | Open, High, Low, Close, Volumen aller Märkte > 250k € | 3 Minuten | 1 Jahr |
+| `kurse/1h/` | dasselbe, verdichtet | 1 Stunde | Jahr 2 und 3 |
+| `signale/` | Preis, RSI, Trefferwahrscheinlichkeit, Erwartung, Signal je Markt | jeder Lauf (≈ 5 Min) | 1 Jahr |
+| `signale-1h/` | dasselbe, ein Wert pro Stunde | 1 Stunde | Jahr 2 und 3 |
+| `laeufe/` | Zusammenfassung pro Lauf, Modellqualität | jeder Lauf | 3 Jahre |
+| `meldungen/` | gesendete Kauf-Signale | | 3 Jahre |
 
-Verkaufsmeldungen zu deinen Coins werden absichtlich nicht geloggt, weil das Repository öffentlich ist.
+Abgeschlossene Tage werden als `.csv.gz` gepackt. Nach 3 Jahren wird alles gelöscht. Der Branch wird bei jedem Lauf als einzelner Commit ohne Verlauf gespeichert, sodass gelöschte Daten wirklich keinen Platz mehr belegen.
 
-Daten älter als 3 Jahre löscht der Bot automatisch. Der Branch wird jedes Mal als einzelner Commit ohne Verlauf gespeichert, gelöschte Daten belegen danach also wirklich keinen Platz mehr. Nach 3 Jahren sind es etwa 200 MB, GitHub empfiehlt Repositories unter 1 GB.
+Die 3-Minuten-Werte stammen aus den 1-Minuten-Kerzen von Bitvavo. Deshalb gibt es sie lückenlos, obwohl der Bot nur etwa alle 5 Minuten läuft.
 
-## Coins kaufen oder verkaufen
+**Platz:** etwa 400–450 MB im ersten Jahr (gepackt), danach bleibt es bei rund 500 MB, weil Altes verdichtet und gelöscht wird. GitHub empfiehlt Repositories unter 1 GB.
 
-Bearbeite das Secret `POSITIONS`: Coin hinzufügen nach einem Kauf, entfernen nach einem Verkauf. Stop und Ziel berechnet der Bot beim ersten Lauf aus der Volatilität. Ein nachlaufender Stop sichert danach Gewinne.
+Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil das Repository öffentlich ist.
 
 ## Gut zu wissen
 
