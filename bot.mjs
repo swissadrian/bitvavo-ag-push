@@ -6,7 +6,9 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
-const MIN_VOL=250000;
+const MIN_VOL=50000, MIN_VOL3D=250000;   // > 50k € in 24h UND > 250k € in den letzten 3 Tagen
+const vol3d=d=>{const n=Math.round(72/TFH[TF]);let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
+const eligible=m=>m.vol>=MIN_VOL&&(m.vol3d??0)>=MIN_VOL3D;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
@@ -134,7 +136,7 @@ const TOPIC=(process.env.NTFY_TOPIC||'').trim();
 const CMD=TOPIC?TOPIC+'-cmd':'';                         // Kanal für Kauf/Verkauf-Eingaben aus der App
 const LEVEL=+(process.env.MIN_LEVEL||2);                 // 2 = nur Starker Kauf, 1 = ab Kauf
 const LOG=process.env.LOG_DIR||'logdata', T0=Date.now();
-const DAY_MS=864e5, FULL_DAYS=365, KEEP_YEARS=3;
+const DAY_MS=864e5, FULL_DAYS=365, SIG_DAYS=30, KEEP_YEARS=3;   // 3-Min-Kurse 1 Jahr, Signale je Lauf 30 Tage
 
 /* ---------- Zustand: verschlüsselt im Logbuch (nur mit deinem ntfy-Kanal lesbar) ---------- */
 const STATE_FILE=LOG+'/zustand.enc';
@@ -207,11 +209,11 @@ function appendCsv(rel,header,rows){
   fs.appendFileSync(f,rows.map(r=>r.map(csvq).join(',')).join('\n')+'\n');
 }
 const H3=['zeit_utc','markt','open','high','low','close','volumen'];
-const HS=['zeit_utc','markt','preis_eur','volumen_24h_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'];
+const HS=['zeit_utc','markt','preis_eur','volumen_24h_eur','volumen_3t_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'];
 // 1-Minuten-Kerzen von Bitvavo zu 3-Minuten-Werten zusammenfassen
 async function log3m(){
   const now=Date.now(),rows={};
-  await pool(markets.filter(m=>m.vol>=MIN_VOL),5,async m=>{
+  await pool(markets.filter(eligible),5,async m=>{
     const last=st.last3m[m.market]||now-60*60e3;
     const lim=Math.round(clip((now-last)/60e3+6,10,1440));
     const c=(await j(`${API}/${m.market}/candles?interval=1m&limit=${lim}`)).slice().reverse();
@@ -225,16 +227,16 @@ async function log3m(){
 }
 function logRun(buys){
   const now=Date.now(),d=dayOf(now),t=iso(now),all=Object.values(results);
-  appendCsv(`signale/${d.slice(0,4)}/${d}.csv`,HS,markets.filter(m=>results[m.market]&&m.vol>=MIN_VOL).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
+  appendCsv(`signale/${d.slice(0,4)}/${d}.csv`,HS,markets.filter(m=>results[m.market]&&eligible(m)).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),Math.round(m.vol3d),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
   appendCsv(`laeufe/${d.slice(0,7)}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden_verkaufen','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
-    [[t,TF,markets.filter(m=>m.vol>=MIN_VOL).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((now-T0)/1000).toFixed(0)]]);
+    [[t,TF,markets.filter(eligible).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((now-T0)/1000).toFixed(0)]]);
   appendCsv(`meldungen/${d.slice(0,7)}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
 }
 /* Aufräumen: abgeschlossene Tage packen, nach 1 Jahr auf Stundenwerte verdichten, nach 3 Jahren löschen */
 function files(dir){const out=[];if(!fs.existsSync(dir))return out;for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=dir+'/'+e.name;if(e.isDirectory())out.push(...files(p));else out.push(p)}return out}
 function readCsv(p){const t=p.endsWith('.gz')?zlib.gunzipSync(fs.readFileSync(p)).toString('utf8'):fs.readFileSync(p,'utf8');const [h,...r]=t.trim().split('\n');return{h,rows:r}}
 function housekeeping(){
-  const today=dayOf(Date.now()),cutFull=dayOf(Date.now()-FULL_DAYS*DAY_MS),cutAll=new Date();cutAll.setUTCFullYear(cutAll.getUTCFullYear()-KEEP_YEARS);
+  const today=dayOf(Date.now()),cutFull=dayOf(Date.now()-FULL_DAYS*DAY_MS),cutSig=dayOf(Date.now()-SIG_DAYS*DAY_MS),cutAll=new Date();cutAll.setUTCFullYear(cutAll.getUTCFullYear()-KEEP_YEARS);
   const cutAllDay=dayOf(cutAll),cutAllMon=cutAllDay.slice(0,7);let packed=0,thinned=0,deleted=0;
   for(const p of files(LOG)){
     if(p.includes('/.git/'))continue;
@@ -244,7 +246,7 @@ function housekeeping(){
     if(day?day<cutAllDay:m[1]<cutAllMon){fs.unlinkSync(p);deleted++;continue}
     if(!day)continue;
     // Nach 1 Jahr: nur noch Stundenwerte
-    if(day<cutFull&&(p.includes('/kurse/3min/')||p.includes('/signale/'))){
+    if((day<cutFull&&p.includes('/kurse/3min/'))||(day<cutSig&&p.includes('/signale/'))){
       const {h,rows}=readCsv(p),hourly=new Map();
       if(p.includes('/kurse/3min/')){for(const r of rows){const c=r.split(','),k=c[0].slice(0,13)+':00|'+c[1],x=hourly.get(k);
           if(!x)hourly.set(k,[c[0].slice(0,13)+':00',c[1],+c[2],+c[3],+c[4],+c[5],+c[6]]);else{x[3]=Math.max(x[3],+c[3]);x[4]=Math.min(x[4],+c[4]);x[5]=+c[5];x[6]+=+c[6]}}
@@ -299,9 +301,13 @@ async function main(){
   const tick24=Object.fromEntries(t.map(x=>[x.market,x]));
   markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
-  console.log(`${markets.length} Märkte, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
-  await log3m().catch(e=>console.warn('3-Minuten-Log',e.message));
+  console.log(`${markets.length} Märkte über 50k € in 24h, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
   await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows)});
+  markets.forEach(m=>{if(data[m.market])m.vol3d=vol3d(data[m.market])});
+  markets=markets.filter(m=>data[m.market]&&(eligible(m)||st.pos[m.market]));
+  for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
+  console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
+  await log3m().catch(e=>console.warn('3-Minuten-Log',e.message));
   if(st.geo)GEO={...GEO,...st.geo};
   if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis();
   await trainModel();
@@ -309,7 +315,7 @@ async function main(){
   markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
 
   const now=Date.now(),buys=[],sells=[];
-  for(const m of markets){const r=results[m.market];if(!r||m.vol<MIN_VOL)continue;
+  for(const m of markets){const r=results[m.market];if(!r||!eligible(m))continue;
     const key='b:'+m.market+':'+TF,on=r.sig[0]>=LEVEL,prev=st.notified[key];
     if(on&&!(prev&&prev.s))buys.push({t:`${r.sig[1]}: ${m.base} (${TF})`,b:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.p*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,ev:r.ev});
     st.notified[key]={s:on,t:now}}

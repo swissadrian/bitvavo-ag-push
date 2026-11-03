@@ -1,6 +1,6 @@
 # Bitvavo Signal-Bot
 
-Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 250'000 € Volumen in 24h. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
+Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 50'000 € Volumen in 24h **und** mehr als 250'000 € in den letzten 3 Tagen. So kommen auch Coins mit plötzlichem Volumenanstieg (Pumps) auf die Liste, während Coins ohne nennenswerten Handel draussen bleiben. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
 
 - bei jedem **neuen** Kauf-Signal (Standard: nur «Starker Kauf»)
 - bei Verkaufsempfehlungen für deine Coins: Stop erreicht, Ziel erreicht, Modell negativ, stark überkauft
@@ -43,10 +43,10 @@ Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten)
 
 | Ordner | Inhalt | Auflösung | Aufbewahrung |
 |---|---|---|---|
-| `kurse/3min/` | Open, High, Low, Close, Volumen aller Märkte > 250k € | 3 Minuten | 1 Jahr |
+| `kurse/3min/` | Open, High, Low, Close, Volumen aller Märkte der Beobachtungsliste | 3 Minuten | 1 Jahr |
 | `kurse/1h/` | dasselbe, verdichtet | 1 Stunde | Jahr 2 und 3 |
-| `signale/` | Preis, RSI, Trefferwahrscheinlichkeit, Erwartung, Signal je Markt | jeder Lauf (≈ 5 Min) | 1 Jahr |
-| `signale-1h/` | dasselbe, ein Wert pro Stunde | 1 Stunde | Jahr 2 und 3 |
+| `signale/` | Preis, Volumen 24h und 3 Tage, RSI, Trefferwahrscheinlichkeit, Erwartung, Signal je Markt | jeder Lauf (≈ 5 Min) | 30 Tage |
+| `signale-1h/` | dasselbe, ein Wert pro Stunde | 1 Stunde | bis 3 Jahre |
 | `laeufe/` | Zusammenfassung pro Lauf, Modellqualität | jeder Lauf | 3 Jahre |
 | `meldungen/` | gesendete Kauf-Signale | | 3 Jahre |
 
@@ -54,7 +54,7 @@ Abgeschlossene Tage werden als `.csv.gz` gepackt. Nach 3 Jahren wird alles gelö
 
 Die 3-Minuten-Werte stammen aus den 1-Minuten-Kerzen von Bitvavo. Deshalb gibt es sie lückenlos, obwohl der Bot nur etwa alle 5 Minuten läuft.
 
-**Platz:** etwa 400–450 MB im ersten Jahr (gepackt), danach bleibt es bei rund 500 MB, weil Altes verdichtet und gelöscht wird. GitHub empfiehlt Repositories unter 1 GB.
+**Platz:** rund 5 MB pro Markt und Jahr. Bei 100 Märkten etwa 500 MB, bei 150 Märkten etwa 700 MB, danach stabil, weil Altes verdichtet und gelöscht wird. GitHub empfiehlt Repositories unter 1 GB. Die Anzahl Märkte steht in `laeufe/` (Spalte `maerkte`).
 
 Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil das Repository öffentlich ist.
 

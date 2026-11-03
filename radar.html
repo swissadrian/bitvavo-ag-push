@@ -164,7 +164,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   </section>
 
   <section class="panel" style="padding:12px 14px;display:flex;flex-direction:column;gap:8px">
-    <span class="lbl">Trending auf CoinGecko · markiert = auf Bitvavo handelbar mit &gt; 250k € Volumen</span>
+    <span class="lbl">Trending auf CoinGecko · markiert = auf der Bitvavo-Beobachtungsliste (&gt; 50k € in 24h und &gt; 250k € in 3 Tagen)</span>
     <div class="trend-list" id="trending"><span class="muted">lädt…</span></div>
   </section>
 
@@ -243,7 +243,9 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 <script>
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
-const MIN_VOL=250000;
+const MIN_VOL=50000, MIN_VOL3D=250000;   // > 50k € in 24h UND > 250k € in den letzten 3 Tagen
+const vol3d=d=>{const n=Math.round(72/TFH[TF]);let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
+const eligible=m=>m.vol>=MIN_VOL&&(m.vol3d??0)>=MIN_VOL3D;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
@@ -408,13 +410,15 @@ async function run(force){
     if(full){renderTrending();await loadCgInfo();data={};for(const k in raw)delete raw[k]}
     let done=0;
     await pool(markets,6,async m=>{await fetchCandles(m,full);done++;if(full&&done%5===0)setStat(`Lade Kursverlauf ${done}/${markets.length} (je ${HIST} Kerzen)…`,'')});
+    markets.forEach(m=>{if(data[m.market])m.vol3d=vol3d(data[m.market])});
+    markets=markets.filter(m=>data[m.market]&&(eligible(m)||pf.some(p=>p.m===m.market)));
     for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
     if(full)await trainModel();
     results={};markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
     journalUpdate();pfUpdate();checkAlerts();
     render();renderMood();renderModel();renderJournal();renderPf();renderLog();
     if(!selected&&window.innerWidth>900){const best=sorted()[0];if(best)select(best.market)}else if(selected)renderDetail();
-    setStat(`${markets.filter(m=>m.vol>=MIN_VOL).length} Märkte > 250k € · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
+    setStat(`${markets.filter(eligible).length} Märkte (>50k €/24h, >250k €/3T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
   }catch(e){
     console.error(e);setStat('Fehler beim Laden','err');
     if(!Object.keys(results).length)$('#list').innerHTML=`<div class="empty"><div class="err-box"><b>Daten konnten nicht geladen werden</b> (${e.message}).<br><br>Die Vorschau in der Claude-App sperrt Internetabrufe. Öffne die Datei stattdessen in Chrome: Datei herunterladen und in den Downloads mit Chrome öffnen, oder die Datei auf einer Webseite wie Netlify Drop hochladen und den Link aufrufen.</div></div>`;
@@ -527,7 +531,7 @@ let nset={buy:true,lvl:2,sell:true,browser:false,topic:'',...(store('bvr-nset')|
 function saveN(){store('bvr-nset',nset)}
 function checkAlerts(){
   const ev=[],now=Date.now();
-  markets.forEach(m=>{const r=results[m.market];if(!r||m.vol<MIN_VOL)return;const key='b:'+m.market+':'+TF,on=r.sig[0]>=nset.lvl,prev=nstate[key];
+  markets.forEach(m=>{const r=results[m.market];if(!r||!eligible(m))return;const key='b:'+m.market+':'+TF,on=r.sig[0]>=nset.lvl,prev=nstate[key];
     if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.p*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,kind:'buy',m:m.market});
     nstate[key]={s:on,t:now}});
   pf.forEach(p=>{const a=advice(p),key='s:'+p.m,prev=nstate[key];
@@ -620,7 +624,7 @@ function renderModel(){
    <div><span class="lbl">Trefferquote zufällig</span><b>${(m.baseWin*100).toFixed(0)}%</b></div>
    <div><span class="lbl">Trefferquote Top-10 %</span><b class="${lift>1.05?'up':'down'}">${(m.top.win*100).toFixed(0)}%</b></div>
    <div><span class="lbl">Ø Ergebnis Top-10 %</span><b class="${m.top.r>0?'up':'down'}">${fmtR(m.top.r)}</b></div>
-   <div style="grid-column:1/-1" class="muted">${lift>1.1?`Im unbekannten Testzeitraum trafen die besten 10 % der Signale ${lift.toFixed(1)}-mal so oft wie ein zufälliger Einstieg.`:'Im Testzeitraum fand das Modell kaum einen Vorteil gegenüber Zufall. Signale mit Vorsicht behandeln.'} Ergebnisse in R: 1 R ist der Abstand bis zum Stop, Gebühren sind abgezogen.</div>`;
+   <div style="grid-column:1/-1" class="muted">${lift>1.1?`Im unbekannten Testzeitraum trafen die besten 10 % der Signale ${lift.toFixed(1)}-mal so oft wie ein zufälliger Einstieg.`:'Im Testzeitraum fand das Modell kaum einen Vorteil gegenüber Zufall. Signale mit Vorsicht behandeln.'} Gewinnschwelle bei 1,5 : 1 ist rund 40 %.</div>`;
   const ord=FEATS.map((F,k)=>({n:F.n,w:m.w[k]})).sort((a,b)=>Math.abs(b.w)-Math.abs(a.w)),mx=Math.max(...ord.map(o=>Math.abs(o.w)))||1;
   $('#mW').innerHTML=ord.map(o=>{const w=Math.abs(o.w)/mx*50;return `<div class="wt"><span>${o.n}</span><div class="bar"><i style="left:${o.w>=0?50:50-w}%;width:${w}%;background:var(${o.w>=0?'--up':'--down'})"></i></div><span class="num ${o.w>=0?'up':'down'}" style="text-align:right">${o.w>=0?'+':''}${o.w.toFixed(2)}</span></div>`}).join('');
 }
