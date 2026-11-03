@@ -15,7 +15,7 @@ Die Bitvavo-Gebühr (0,25 % pro Kauf und Verkauf) ist im Lernmodell eingerechnet
 4. Optional unter dem Reiter **Variables**:
    - `TF`: `15m`, `1h` (Standard) oder `4h`
    - `MIN_LEVEL`: `2` = nur Starker Kauf (Standard), `1` = ab Kauf
-5. Starte den Bot im Tab **Actions** über «Bitvavo Signale» → **Run workflow** einmal von Hand. Danach läuft er automatisch alle 5 Minuten.
+5. Starte den Bot im Tab **Actions** über «Bitvavo Signale» → **Run workflow** einmal von Hand. Danach läuft er ununterbrochen und prüft alle 5 Minuten.
 
 ## Käufe und Verkäufe eintragen (ohne Secret)
 
@@ -62,7 +62,8 @@ Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil da
 
 - Beim ersten Lauf kommen alle aktuell aktiven Kauf-Signale auf einmal, höchstens 4 einzeln und der Rest zusammengefasst.
 - Die Radar-App läuft unter https://swissadrian.github.io/bitvavo-ag-push/ (Ordner `docs/`).
-- 5 Minuten ist der kürzeste Takt, den GitHub erlaubt. Bei hoher Last startet GitHub Läufe verspätet oder lässt einzelne aus, rechne also eher mit 5–15 Minuten.
+- Takt: Ein Durchgang läuft knapp 6 Stunden und prüft darin alle 5 Minuten (`run-loop.sh`). Danach startet er selbst den nächsten. Der GitHub-Zeitplan (alle 30 Minuten) ist nur die Reserve, falls die Kette abreisst. Im Tab Actions siehst du deshalb nur etwa 4 Einträge pro Tag, jeder mit rund 70 Läufen.
+- Neue Bot-Versionen übernimmt der laufende Durchgang sofort. Änderungen am Workflow selbst gelten erst ab dem nächsten Durchgang.
 - Bei öffentlichen Repositories pausiert GitHub geplante Läufe nach 60 Tagen ohne Commit. Dann einfach eine kleine Änderung committen, zum Beispiel in dieser README.
 - Fällt der Datenabruf aus, kommt eine Fehlermeldung und eine Entwarnung, sobald es wieder läuft.
 - Das ist keine Anlageberatung. Setze immer einen echten Stop-Loss bei Bitvavo.
