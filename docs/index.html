@@ -621,7 +621,7 @@ function renderMood(){
   const all=Object.values(results),b=all.filter(r=>r.sig[0]>0).length,s=all.filter(r=>r.sig[0]<0).length;
   $('#breadth').innerHTML=`<span class="up">${b}</span> / <span class="down">${s}</span>`;
   $('#breadthTxt').textContent=b>s*1.5?'Viele Long-Setups mit Vorteil':s>b*1.5?'Wenige Setups mit Vorteil, Vorsicht':'Gemischter Markt, selektiv handeln';
-  const btc=results['BTC-EUR'];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(btc.ev>=0?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.p*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
+  const btc=results['BTC-EUR'];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(['aufwärts','erholt'].includes(btc.trend)?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.p*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
