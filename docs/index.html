@@ -141,6 +141,9 @@ a{color:var(--accent)}
 .nrow .chk{flex-direction:row;align-items:center;gap:6px;font-size:14px;color:var(--fg)}
 .nrow input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
 .hint{font-size:12px;color:var(--muted);max-width:65ch;margin:0}
+.cand{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.cand:last-child{border-bottom:0}
+.pill.watch{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 footer{font-size:12px;color:var(--muted);max-width:75ch}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -173,6 +176,11 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <section class="panel" style="padding:12px 14px;display:flex;flex-direction:column;gap:8px">
     <span class="lbl">Trending auf CoinGecko · markiert = auf der Bitvavo-Beobachtungsliste (&gt; 50k € in 24h und &gt; 250k € in 3 Tagen)</span>
     <div class="trend-list" id="trending"><span class="muted">lädt…</span></div>
+  </section>
+
+  <section class="panel" aria-label="Beste Kandidaten" style="padding:12px 16px;display:flex;flex-direction:column;gap:4px">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Beste Kandidaten</h2><span class="muted" style="font-size:12px" id="candsHint"></span></div>
+    <div id="cands"><div class="muted">Wird geladen…</div></div>
   </section>
 
   <div class="learn">
@@ -423,7 +431,7 @@ async function run(force){
     if(full)await trainModel();
     results={};markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
     journalUpdate();pfUpdate();checkAlerts();
-    render();renderMood();renderModel();renderJournal();renderPf();renderLog();
+    render();renderMood();renderCands();renderModel();renderJournal();renderPf();renderLog();
     if(!selected&&window.innerWidth>900){const best=sorted()[0];if(best)select(best.market)}else if(selected)renderDetail();
     setStat(`${markets.filter(eligible).length} Märkte (>50k €/24h, >250k €/3T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
   }catch(e){
@@ -587,6 +595,7 @@ function initNotify(){
     if(e.target.checked){try{wake=await navigator.wakeLock.request('screen')}catch(x){e.target.checked=false;$('#nWakeTxt').textContent='Nicht verfügbar in diesem Browser'}}
     else{wake?.release();wake=null}});
   document.addEventListener('visibilitychange',async()=>{if(document.visibilityState==='visible'&&$('#nWake').checked&&(!wake||wake.released)){try{wake=await navigator.wakeLock.request('screen')}catch(x){}}});
+  $('#cands').addEventListener('click',e=>{const r=e.target.closest('.cand');if(r&&results[r.dataset.m])select(r.dataset.m)});
   $('#pfList').addEventListener('click',e=>{const r=e.target.closest('.pfrow');if(r&&results[r.dataset.m])select(r.dataset.m)});
   nStatus();renderLog();renderPf();
 }
@@ -616,6 +625,18 @@ function renderTrending(){
   const el=$('#trending');if(!trendingRaw.length){el.innerHTML='<span class="muted">CoinGecko-Trends nicht verfügbar</span>';return}
   const onB=new Set(markets.map(m=>m.base));
   el.innerHTML=trendingRaw.map(c=>`<span class="${onB.has(c.symbol.toUpperCase())?'on':''}" title="${c.name}">${c.symbol.toUpperCase()}</span>`).join('');
+}
+// Beste Kandidaten: die 5 Coins mit dem besten Rang, auch wenn keiner einen klaren Vorteil hat
+function renderCands(){
+  const el=$('#cands');if(!el)return;
+  const top=markets.filter(m=>results[m.market]&&eligible(m)).sort((a,b)=>results[b.market].p-results[a.market].p).slice(0,5);
+  if(!top.length){el.innerHTML='<div class="muted">Noch keine Daten.</div>';return}
+  const anyBuy=top.some(m=>results[m.market].sig[0]>0);
+  $('#candsHint').textContent=anyBuy?'Mindestens einer davon ist ein Kauf-Signal.':'Keiner hat nach Gebühren einen klaren Vorteil: beobachten, noch nicht kaufen.';
+  el.innerHTML=top.map((m,i)=>{const r=results[m.market],why=r.reasons.find(x=>x[0]>0);return `<div class="cand" tabindex="0" data-m="${m.market}">
+    <span class="num muted">${i+1}</span>
+    <div style="min-width:0"><b class="sym">${m.base}</b> <span class="num ${m.chg>=0?'up':'down'}" style="font-size:12px">${pct(m.chg)}</span><div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${why?why[1]:'Kein positiver Faktor'}</div></div>
+    <div style="text-align:right"><span class="pill ${r.sig[0]>0?pillCls(r.sig[0]):'watch'}">${r.sig[0]>0?r.sig[1]:'Beobachten'}</span><div class="num muted" style="font-size:11px;margin-top:3px">${(r.p*100).toFixed(0)}% · ${fmtR(r.ev)}</div></div></div>`}).join('');
 }
 function renderMood(){
   const all=Object.values(results),b=all.filter(r=>r.sig[0]>0).length,s=all.filter(r=>r.sig[0]<0).length;
