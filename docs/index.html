@@ -81,6 +81,8 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .row .pill{padding:3px 7px;font-size:11px}
 }
 .row .vol{color:var(--muted)}
+.only-s{display:none}
+@media (max-width:620px){.only-s{display:inline}}
 /* Detail */
 .detail{padding:16px;display:flex;flex-direction:column;gap:14px;position:sticky;top:12px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
@@ -227,10 +229,11 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
     </select>
     <span class="muted" id="count"></span>
   </div>
+  <p class="hint" id="listNote" style="margin:-8px 0 0"></p>
 
   <div class="grid">
     <section class="panel" aria-label="Märkte">
-      <div class="list-head lbl"><span>Markt</span><span>Preis</span><span class="hide-s">24h</span><span>Vol. 24h</span><span class="hide-s">Treffer-W.</span><span>Signal</span></div>
+      <div class="list-head lbl"><span>Markt</span><span>Preis<span class="only-s"> · 24h</span></span><span class="hide-s">24h %</span><span>Vol. 24h</span><span class="hide-s">Treffer-W.</span><span>Signal</span></div>
       <div id="list"><div class="empty">Daten werden von Bitvavo geladen…</div></div>
     </section>
     <aside class="panel detail" id="detail" hidden aria-live="polite"></aside>
@@ -613,6 +616,8 @@ const pillCls=k=>['sm2','sm1','s0','s1','s2'][k+2];
 function scoreBar(s){const w=Math.abs(s)/2;return `<div class="scorebar"><i style="left:${s>=0?50:50-w}%;width:${w}%;background:var(${s>=0?'--up':'--down'})"></i></div>`}
 function render(){
   const rows=sorted();$('#count').textContent=rows.length+' von '+Object.keys(results).length;
+  const tfName={'15m':'15-Minuten','1h':'1-Stunden','4h':'4-Stunden'}[TF];
+  $('#listNote').textContent=`% = Kursveränderung der letzten 24 Stunden (immer, unabhängig von der Auswahl oben). ${TF} legt fest, dass Chart, Indikatoren und Signale auf ${tfName}-Kerzen gerechnet werden.`;
   if(!rows.length){$('#list').innerHTML='<div class="empty">'+(Object.keys(results).length?'Keine Märkte passen zum Filter.':'Daten werden geladen…')+'</div>';return}
   const narrow=window.innerWidth<=620;
   $('#list').innerHTML=rows.map(m=>{const r=results[m.market];return `<div class="row ${selected===m.market?'sel':''}" tabindex="0" data-m="${m.market}">
@@ -637,7 +642,7 @@ function renderCands(){
   $('#candsHint').textContent=anyBuy?'Mindestens einer davon ist ein Kauf-Signal.':'Keiner hat nach Gebühren einen klaren Vorteil: beobachten, noch nicht kaufen.';
   el.innerHTML=top.map((m,i)=>{const r=results[m.market],why=r.reasons.find(x=>x[0]>0);return `<div class="cand" tabindex="0" data-m="${m.market}">
     <span class="num muted">${i+1}</span>
-    <div style="min-width:0"><b class="sym">${m.base}</b> <span class="num ${m.chg>=0?'up':'down'}" style="font-size:12px">${pct(m.chg)}</span><div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${why?why[1]:'Kein positiver Faktor'}</div></div>
+    <div style="min-width:0"><b class="sym">${m.base}</b> <span class="num ${m.chg>=0?'up':'down'}" style="font-size:12px">${pct(m.chg)} <span class="muted">24h</span></span><div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${why?why[1]:'Kein positiver Faktor'}</div></div>
     <div style="text-align:right"><span class="pill ${r.sig[0]>0?pillCls(r.sig[0]):'watch'}">${r.sig[0]>0?r.sig[1]:'Beobachten'}</span><div class="num muted" style="font-size:11px;margin-top:3px">${(r.p*100).toFixed(0)}% · ${fmtR(r.ev)}</div></div></div>`}).join('');
 }
 function renderMood(){
