@@ -31,6 +31,12 @@ Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push. Stop und Ziel bere
 
 Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.enc`). Schlüssel ist dein ntfy-Kanal: Ohne ihn kann niemand die Datei lesen. Änderst du den Kanal, beginnt der Bot mit leerem Bestand.
 
+## Trade-Aufbau: automatisch nach Gebühren optimiert
+
+Einmal pro Woche testet der Bot 108 Varianten auf dem Kursverlauf aller Märkte: Stop-Abstand (1–3 ATR, mindestens 0 / 1,5 / 2,5 % vom Kurs), Ziel (1,5 / 2 / 3 × Risiko) und Haltedauer (8 / 24 / 48 h). Bewertet wird jeweils der unbekannte Testzeitraum nach Abzug von 0,25 % Gebühr pro Kauf und Verkauf. Der beste Aufbau gilt ab dann für Bot und Radar-App. Ergebnisse stehen im Branch `logs` unter `analyse/`.
+
+Zu enge Stops verlieren schon durch die Gebühren. Ein Stop von 1 ATR auf dem 1h-Chart liegt oft nur etwa 0,5 % entfernt, so viel kosten auch Kauf und Verkauf zusammen. Stablecoins wie USDC oder EURC werden nicht analysiert.
+
 ## Logbuch
 
 Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC.

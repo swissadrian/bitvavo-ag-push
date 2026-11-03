@@ -222,7 +222,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <div class="learn">
     <section class="panel" aria-label="Lernmodell">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Lernmodell</h2><span class="muted" id="mTime">noch nicht trainiert</span></div>
-      <p class="muted" style="margin:0;max-width:65ch">Das Modell testet jede Kerze der letzten Wochen auf allen gefilterten Märkten: Hätte ein Kauf das Ziel (+1,5 ATR) vor dem Stop (−1 ATR) erreicht? Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten, die das Modell beim Test nicht kannte.</p>
+      <p class="muted" style="margin:0;max-width:65ch">Das Modell testet jede Kerze der letzten Wochen auf allen gefilterten Märkten: Hätte ein Kauf nach Abzug der Bitvavo-Gebühren das Ziel vor dem Stop erreicht? Stop-Abstand, Ziel und Haltedauer bestimmt der GitHub-Bot jede Woche neu anhand echter Daten. Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten, die das Modell beim Test nicht kannte.</p>
       <div class="stats" id="mStats"></div>
       <div><span class="lbl">Gelernte Gewichte · rechts = spricht für Kauf, links = dagegen</span><div class="wts" id="mW" style="margin-top:8px"></div></div>
     </section>
@@ -246,9 +246,15 @@ const CG='https://api.coingecko.com/api/v3';
 const MIN_VOL=250000;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
-const HOR={'15m':16,'1h':8,'4h':6};        // Haltedauer im Backtest: 4h / 8h / 24h
+const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
 const TFMS={'15m':9e5,'1h':36e5,'4h':144e5};
-const TPm=1.5, SLm=1, FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)                       // Ziel +1,5 ATR, Stop −1 ATR
+const FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)
+// Trade-Aufbau: Risiko R = max(sl × ATR, minRisk × Kurs), Ziel = tp × R, Haltedauer h Stunden.
+// Der GitHub-Bot testet regelmässig, welcher Aufbau nach Gebühren am besten funktioniert, und veröffentlicht ihn.
+let GEO={sl:2,minRisk:0.02,tp:2,h:24};
+const STABLE=new Set(['USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
+const riskOf=(e,a)=>Math.max(GEO.sl*a,GEO.minRisk*e);
+const horBars=()=>Math.max(2,Math.round(GEO.h/TFH[TF]));
 const HIST=1000, RETRAIN_MS=30*60e3;
 let TF='1h', markets=[], data={}, results={}, trending=new Set(), trendingRaw=[], cgInfo={}, selected=null, loading=false;
 let model=null, lastTrain=0;
@@ -299,10 +305,13 @@ const feat=(d,i)=>FEATS.map(F=>F.f(d,i));
 
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
 function outcome(d,i){
-  const e=d.c[i],a=d.A[i],tp=e+TPm*a,sl=e-SLm*a,H=HOR[TF];
-  const fee=2*FEE*e/(SLm*a); // Bitvavo-Gebühr für Kauf und Verkauf, in R
-  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1-fee};if(d.h[k]>=tp)return{y:1,r:TPm-fee}}
-  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/(SLm*a)-fee};
+  return outcomeG(d,i,GEO);
+}
+function outcomeG(d,i,g){
+  const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e+g.tp*R,sl=e-R,H=Math.max(2,Math.round(g.h/TFH[TF]));
+  const fee=2*FEE*e/R; // Bitvavo-Gebühr für Kauf und Verkauf, in R
+  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1-fee};if(d.h[k]>=tp)return{y:1,r:g.tp-fee}}
+  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/R-fee};
 }
 
 /* ---------- Lernen: logistische Regression ---------- */
@@ -323,7 +332,7 @@ function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
 async function trainModel(){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
-  const S=[];const H=HOR[TF];
+  const S=[];const H=horBars();
   for(const mk of Object.keys(data)){const d=data[mk];for(let i=210;i<d.c.length-H;i++){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
@@ -356,16 +365,18 @@ function analyze(m,d){
   FEATS.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
   reasons.sort((a,b)=>Math.abs(b[0])-Math.abs(a[0]));
   const lb=SRBARS[TF],sup=Math.min(...d.l.slice(-lb)),res=Math.max(...d.h.slice(-lb)),a=d.A[N];
-  const stop=last-SLm*a,t1=last+TPm*a,t2=res>t1?res:last+2.5*a;
-  const sig=ev>=.25?[2,'Starker Kauf']:ev>=.08?[1,'Kauf']:ev>-.08?[0,'Neutral']:ev>-.25?[-1,'Meiden']:[-2,'Verkaufen'];
+  const R=riskOf(last,a),stop=last-R,t1=last+GEO.tp*R,t2=Math.max(res,last+(GEO.tp+1)*R);
+  const sig=ev>=.25?[2,'Starker Kauf']:ev>=.08?[1,'Kauf']:ev>-.08?[0,'Neutral']:ev>-.25?[-1,'Meiden']:[-2,'Stark meiden'];
   return{p,cal,ev,score:Math.round(clip(ev*100,-100,100)),sig,reasons,rsi:d.R[N],atrPct:a/last*100,volR:d.vr[N],sup,res,stop,t1,t2,
     trend:last>d.e50[N]?(d.e20[N]>d.e50[N]?'aufwärts':'erholt'):(d.e20[N]<d.e50[N]?'abwärts':'schwach'),d};
 }
 
 /* ---------- Daten ---------- */
+// Vom GitHub-Bot ermittelter, nach Gebühren bester Trade-Aufbau
+async function loadGeo(){try{const g=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/aktuell.json?'+Date.now());if(g&&g.geo)GEO={...GEO,...g.geo}}catch(e){}}
 async function loadMarkets(){
   const t=await j(API+'/ticker/24h');
-  return t.filter(x=>x.market&&x.market.endsWith('-EUR')&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||pf.some(p=>p.m===x.market)))
+  return t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||pf.some(p=>p.m===x.market)))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,open:+x.open,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}))
     .sort((a,b)=>b.vol-a.vol);
 }
@@ -392,7 +403,7 @@ async function run(force){
   const full=force||!model||model.tf!==TF||Date.now()-lastTrain>RETRAIN_MS;
   try{
     setStat('Lade Märkte…','');
-    if(full){await loadSide();}
+    if(full){await loadSide();await loadGeo();}
     markets=await loadMarkets();
     if(full){renderTrending();await loadCgInfo();data={};for(const k in raw)delete raw[k]}
     let done=0;
@@ -425,7 +436,7 @@ function journalUpdate(){
     for(let k=i0+1;k<d.c.length;k++){
       if(d.l[k]<=e.sl){e.st='loss';e.r=-1;e.end=d.ts[k];return}
       if(d.h[k]>=e.tp){e.st='win';e.r=(e.tp-e.entry)/risk;e.end=d.ts[k];return}
-      if(k-i0>=HOR[TF]){e.st='time';e.r=(d.c[k]-e.entry)/risk;e.end=d.ts[k];return}}});
+      if(k-i0>=horBars()){e.st='time';e.r=(d.c[k]-e.entry)/risk;e.end=d.ts[k];return}}});
   if(journal.length>500)journal=journal.slice(-500);
   store('bvr-journal',journal);
 }
@@ -450,7 +461,7 @@ function atrOf(mk,price){const r=results[mk];return r?r.d.A[r.d.c.length-1]:pric
 function addPos(mk,price,qty){
   const a=atrOf(mk,price),cur=curOf(mk)||price;
   pf=pf.filter(p=>p.m!==mk);
-  pf.push({m:mk,buy:price,qty:qty||null,t:Date.now(),stop:price-1.5*a,tp:price+2*a,high:Math.max(price,cur),tpHit:cur>=price+2*a});
+  const R=riskOf(price,a);pf.push({m:mk,buy:price,qty:qty||null,t:Date.now(),stop:price-R,tp:price+GEO.tp*R,high:Math.max(price,cur),tpHit:cur>=price+GEO.tp*R});
   store('bvr-pf',pf);
 }
 function closePos(mk,price){
@@ -463,12 +474,12 @@ function closePos(mk,price){
 function advice(p){
   const last=curOf(p.m);if(last==null)return{act:'na',label:'Keine Kursdaten',cls:'s0',why:'Markt aktuell nicht abrufbar',pnl:0,eur:null,eff:p.stop};
   const r=results[p.m],a=atrOf(p.m,last),pnl=(last/p.buy-1)*100,eur=p.qty?(last-p.buy)*p.qty:null;
-  const trail=p.high>=p.buy+a?p.high-2*a:-Infinity;
+  const R=riskOf(p.buy,a),trail=p.high>=p.buy+R?p.high-R:-Infinity;
   const eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail);
   const o={pnl,eur,eff,last};
   if(last<=eff)return{...o,act:'stop',label:'Verkaufen',cls:'sm2',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
   if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',cls:'take',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
-  if(r&&r.sig[0]<=-1)return{...o,act:'signal',label:'Verkaufen',cls:'sm1',why:pnl>0?`Modell sieht keinen Vorteil mehr (${fmtR(r.ev)} pro Trade), Gewinn von ${pct(pnl)} sichern`:`Modell sieht keinen Vorteil mehr (${fmtR(r.ev)} pro Trade), Verlust nicht weiter laufen lassen`};
+  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',cls:'sm1',why:pnl>0?`Modell zählt ${p.m.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins, Gewinn von ${pct(pnl)} sichern`:`Modell zählt ${p.m.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins, Verlust nicht weiter laufen lassen`};
   if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',cls:'take',why:`RSI ${r.rsi.toFixed(0)} stark überkauft, Rücksetzer wahrscheinlich`};
   return{...o,act:'hold',label:'Halten',cls:'s0',why:`Stop bei ${fmtP(eff)} €, Ziel bei ${fmtP(p.tp)} €${r?`, Modell ${r.sig[1].toLowerCase()}`:''}`};
 }
@@ -609,7 +620,7 @@ function renderModel(){
    <div><span class="lbl">Trefferquote zufällig</span><b>${(m.baseWin*100).toFixed(0)}%</b></div>
    <div><span class="lbl">Trefferquote Top-10 %</span><b class="${lift>1.05?'up':'down'}">${(m.top.win*100).toFixed(0)}%</b></div>
    <div><span class="lbl">Ø Ergebnis Top-10 %</span><b class="${m.top.r>0?'up':'down'}">${fmtR(m.top.r)}</b></div>
-   <div style="grid-column:1/-1" class="muted">${lift>1.1?`Im unbekannten Testzeitraum trafen die besten 10 % der Signale ${lift.toFixed(1)}-mal so oft wie ein zufälliger Einstieg.`:'Im Testzeitraum fand das Modell kaum einen Vorteil gegenüber Zufall. Signale mit Vorsicht behandeln.'} Gewinnschwelle bei 1,5 : 1 ist rund 40 %.</div>`;
+   <div style="grid-column:1/-1" class="muted">${lift>1.1?`Im unbekannten Testzeitraum trafen die besten 10 % der Signale ${lift.toFixed(1)}-mal so oft wie ein zufälliger Einstieg.`:'Im Testzeitraum fand das Modell kaum einen Vorteil gegenüber Zufall. Signale mit Vorsicht behandeln.'} Ergebnisse in R: 1 R ist der Abstand bis zum Stop, Gebühren sind abgezogen.</div>`;
   const ord=FEATS.map((F,k)=>({n:F.n,w:m.w[k]})).sort((a,b)=>Math.abs(b.w)-Math.abs(a.w)),mx=Math.max(...ord.map(o=>Math.abs(o.w)))||1;
   $('#mW').innerHTML=ord.map(o=>{const w=Math.abs(o.w)/mx*50;return `<div class="wt"><span>${o.n}</span><div class="bar"><i style="left:${o.w>=0?50:50-w}%;width:${w}%;background:var(${o.w>=0?'--up':'--down'})"></i></div><span class="num ${o.w>=0?'up':'down'}" style="text-align:right">${o.w>=0?'+':''}${o.w.toFixed(2)}</span></div>`}).join('');
 }
@@ -629,7 +640,7 @@ function renderDetail(){
    <div class="lbl" style="display:flex;gap:14px;flex-wrap:wrap"><span style="color:var(--warn)">— EMA 20</span><span style="color:var(--accent)">— EMA 50</span><span>┄ Bollinger</span><span>RSI 14 unten</span></div>
    <div class="kv"><div><span class="lbl">Treffer-Wahrsch.</span><b>${(r.p*100).toFixed(0)}%</b></div><div><span class="lbl">Erwartung / Trade</span><b class="${r.ev>0?'up':'down'}">${fmtR(r.ev)}</b></div><div><span class="lbl">Signal-Rang</span><b>Top ${100-r.cal.q*10}%</b></div>${cs?`<div><span class="lbl">Bei ${m.base} zuletzt</span><b>${cs.w}/${cs.n} Ziel</b></div>`:''}</div>
    <div><span class="lbl">Handelsplan</span><p style="margin:4px 0 0;max-width:65ch">${plan}</p></div>
-   <div class="levels"><div><span class="lbl">Stop-Loss</span><b class="down">${fmtP(r.stop)}</b></div><div><span class="lbl">Ziel 1</span><b class="up">${fmtP(r.t1)}</b></div><div><span class="lbl">Ziel 2</span><b class="up">${fmtP(r.t2)}</b></div><div><span class="lbl">Chance/Risiko</span><b>${TPm} : 1</b></div></div>
+   <div class="levels"><div><span class="lbl">Stop-Loss</span><b class="down">${fmtP(r.stop)}</b></div><div><span class="lbl">Ziel 1</span><b class="up">${fmtP(r.t1)}</b></div><div><span class="lbl">Ziel 2</span><b class="up">${fmtP(r.t2)}</b></div><div><span class="lbl">Chance/Risiko</span><b>${GEO.tp} : 1</b></div></div>
    <div class="kv"><div><span class="lbl">Unterstützung</span><b>${fmtP(r.sup)}</b></div><div><span class="lbl">Widerstand</span><b>${fmtP(r.res)}</b></div><div><span class="lbl">ATR (Volatilität)</span><b>${r.atrPct.toFixed(2)}%</b></div><div><span class="lbl">Volumen vs. Schnitt</span><b>${r.volR.toFixed(1)}×</b></div><div><span class="lbl">RSI</span><b>${r.rsi.toFixed(0)}</b></div>${ci.ath!=null?`<div><span class="lbl">Abstand ATH</span><b>${ci.ath.toFixed(0)}%</b></div>`:''}</div>
    <div><span class="lbl">Begründung · Gewicht laut gelerntem Modell</span><ul class="reasons" style="margin-top:6px">${r.reasons.map(([p,t])=>`<li><span class="pts ${p>0?'up':p<0?'down':'muted'}">${p>0?'+':''}${(p*10).toFixed(0)}</span><span>${t}</span></li>`).join('')}${trending.has(m.base)?'<li><span class="pts muted">·</span><span>Trending auf CoinGecko (Info, nicht im Modell)</span></li>':''}</ul></div>
    <div class="links">${ci.id?`<a href="https://www.coingecko.com/en/coins/${ci.id}" target="_blank" rel="noopener">CoinGecko</a>`:''}<a href="https://coinmarketcap.com/currencies/${(ci.id||m.base.toLowerCase())}/" target="_blank" rel="noopener">CoinMarketCap</a><a href="https://www.tradingview.com/chart/?symbol=BITVAVO:${m.base}EUR" target="_blank" rel="noopener">TradingView</a></div>`;

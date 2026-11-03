@@ -9,9 +9,15 @@ const CG='https://api.coingecko.com/api/v3';
 const MIN_VOL=250000;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
-const HOR={'15m':16,'1h':8,'4h':6};        // Haltedauer im Backtest: 4h / 8h / 24h
+const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
 const TFMS={'15m':9e5,'1h':36e5,'4h':144e5};
-const TPm=1.5, SLm=1, FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)                       // Ziel +1,5 ATR, Stop −1 ATR
+const FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)
+// Trade-Aufbau: Risiko R = max(sl × ATR, minRisk × Kurs), Ziel = tp × R, Haltedauer h Stunden.
+// Der GitHub-Bot testet regelmässig, welcher Aufbau nach Gebühren am besten funktioniert, und veröffentlicht ihn.
+let GEO={sl:2,minRisk:0.02,tp:2,h:24};
+const STABLE=new Set(['USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
+const riskOf=(e,a)=>Math.max(GEO.sl*a,GEO.minRisk*e);
+const horBars=()=>Math.max(2,Math.round(GEO.h/TFH[TF]));
 const HIST=1000, RETRAIN_MS=30*60e3;
 
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -54,10 +60,13 @@ const feat=(d,i)=>FEATS.map(F=>F.f(d,i));
 
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
 function outcome(d,i){
-  const e=d.c[i],a=d.A[i],tp=e+TPm*a,sl=e-SLm*a,H=HOR[TF];
-  const fee=2*FEE*e/(SLm*a); // Bitvavo-Gebühr für Kauf und Verkauf, in R
-  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1-fee};if(d.h[k]>=tp)return{y:1,r:TPm-fee}}
-  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/(SLm*a)-fee};
+  return outcomeG(d,i,GEO);
+}
+function outcomeG(d,i,g){
+  const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e+g.tp*R,sl=e-R,H=Math.max(2,Math.round(g.h/TFH[TF]));
+  const fee=2*FEE*e/R; // Bitvavo-Gebühr für Kauf und Verkauf, in R
+  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.l[k]<=sl)return{y:0,r:-1-fee};if(d.h[k]>=tp)return{y:1,r:g.tp-fee}}
+  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(d.c[k]-e)/R-fee};
 }
 
 /* ---------- Lernen: logistische Regression ---------- */
@@ -78,7 +87,7 @@ function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
 async function trainModel(){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
-  const S=[];const H=HOR[TF];
+  const S=[];const H=horBars();
   for(const mk of Object.keys(data)){const d=data[mk];for(let i=210;i<d.c.length-H;i++){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
@@ -111,8 +120,8 @@ function analyze(m,d){
   FEATS.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
   reasons.sort((a,b)=>Math.abs(b[0])-Math.abs(a[0]));
   const lb=SRBARS[TF],sup=Math.min(...d.l.slice(-lb)),res=Math.max(...d.h.slice(-lb)),a=d.A[N];
-  const stop=last-SLm*a,t1=last+TPm*a,t2=res>t1?res:last+2.5*a;
-  const sig=ev>=.25?[2,'Starker Kauf']:ev>=.08?[1,'Kauf']:ev>-.08?[0,'Neutral']:ev>-.25?[-1,'Meiden']:[-2,'Verkaufen'];
+  const R=riskOf(last,a),stop=last-R,t1=last+GEO.tp*R,t2=Math.max(res,last+(GEO.tp+1)*R);
+  const sig=ev>=.25?[2,'Starker Kauf']:ev>=.08?[1,'Kauf']:ev>-.08?[0,'Neutral']:ev>-.25?[-1,'Meiden']:[-2,'Stark meiden'];
   return{p,cal,ev,score:Math.round(clip(ev*100,-100,100)),sig,reasons,rsi:d.R[N],atrPct:a/last*100,volR:d.vr[N],sup,res,stop,t1,t2,
     trend:last>d.e50[N]?(d.e20[N]>d.e50[N]?'aufwärts':'erholt'):(d.e20[N]<d.e50[N]?'abwärts':'schwach'),d};
 }
@@ -180,10 +189,10 @@ async function readCommands(){
 function advice(mk,p,last){
   const r=results[mk],a=r?r.d.A[r.d.c.length-1]:last*0.02;
   const pnl=(last/p.buy-1)*100,eur=p.qty?(last-p.buy)*p.qty:null;
-  const trail=p.high>=p.buy+a?p.high-2*a:-Infinity,eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail),o={pnl,eur,eff,last};
+  const R=riskOf(p.buy,a),trail=p.high>=p.buy+R?p.high-R:-Infinity,eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail),o={pnl,eur,eff,last};
   if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
   if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
-  if(r&&r.sig[0]<=-1)return{...o,act:'signal',label:'Verkaufen',why:`Modell sieht keinen Vorteil mehr (${fmtR(r.ev)} pro Trade)`};
+  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',why:`Modell zählt ${mk.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins`};
   if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',why:`RSI ${r.rsi.toFixed(0)} stark überkauft`};
   return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} €, Ziel ${fmtP(p.tp)} €`};
 }
@@ -245,8 +254,7 @@ function housekeeping(){
       else{for(const r of rows){const k=r.slice(0,13)+'|'+r.split(',')[1];if(!hourly.has(k))hourly.set(k,r)}
         const dest=p.replace('/signale/','/signale-1h/');fs.mkdirSync(path.dirname(dest),{recursive:true});
         fs.writeFileSync(dest.endsWith('.gz')?dest:dest+'.gz',zlib.gzipSync([h,...hourly.values()].join('\n')+'\n',{level:9}));}
-      fs.unlinkSync(p);thinned++;
-    continue;
+      fs.unlinkSync(p);thinned++;continue;
     }
     // Abgeschlossene Tage komprimieren
     if(!m[3]&&day<today){fs.writeFileSync(p+'.gz',zlib.gzipSync(fs.readFileSync(p),{level:9}));fs.unlinkSync(p);packed++;continue}
@@ -255,16 +263,47 @@ function housekeeping(){
   if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Tage gepackt, ${thinned} auf Stundenwerte verdichtet, ${deleted} älter als ${KEEP_YEARS} Jahre gelöscht.`);
 }
 
+/* ---------- Welcher Trade-Aufbau lohnt sich nach Gebühren? (einmal pro Woche) ---------- */
+async function geoAnalysis(){
+  const t0=Date.now(),S=[],tail=Math.round(48/TFH[TF]);
+  for(const d of Object.values(data))for(let i=210;i<d.c.length-tail;i++)if(d.A[i])S.push({d,i,ts:d.ts[i],x:feat(d,i)});
+  if(S.length<2000)return console.log('Zu wenig Daten für die Aufbau-Analyse.');
+  S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75),X=new Float64Array(n*K);
+  S.forEach((s,i)=>{for(let k=0;k<K;k++)X[i*K+k]=s.x[k]});
+  const res=[];
+  for(const sl of [1,1.5,2,3])for(const minRisk of [0,0.015,0.025])for(const tp of [1.5,2,3])for(const h of [8,24,48]){
+    const g={sl,minRisk,tp,h},Y=new Float64Array(n),Rr=new Float64Array(n);
+    S.forEach((s,i)=>{const o=outcomeG(s.d,s.i,g);Y[i]=o.y;Rr[i]=o.r});
+    const m=fit(X,Y,cut,60),test=[];for(let i=cut;i<n;i++)test.push([predict(m,S[i].x),Rr[i],Y[i]]);
+    test.sort((a,b)=>b[0]-a[0]);
+    const top=f=>{const t=test.slice(0,Math.max(1,Math.floor(test.length*f)));return{r:t.reduce((s,x)=>s+x[1],0)/t.length,w:t.reduce((s,x)=>s+x[2],0)/t.length,n:t.length}};
+    const t10=top(.1),t20=top(.2),all=top(1);
+    res.push({...g,base_r:all.r,top10_r:t10.r,top10_win:t10.w,top20_r:t20.r,top10_n:t10.n,score:(t10.r+t20.r)/2});
+  }
+  res.sort((a,b)=>b.score-a.score);
+  const best=res[0];st.geo={sl:best.sl,minRisk:best.minRisk,tp:best.tp,h:best.h};st.geoAt=Date.now();GEO={...GEO,...st.geo};
+  const days=Math.round((S[n-1].ts-S[0].ts)/DAY_MS);
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});
+  fs.writeFileSync(LOG+'/analyse/geometrie.csv',['stop_atr,min_risiko_pct,ziel_r,haltedauer_h,erwartung_alle_r,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,anzahl_top10',
+    ...res.map(r=>[r.sl,r.minRisk*100,r.tp,r.h,r.base_r.toFixed(3),r.top10_r.toFixed(3),r.top10_win.toFixed(3),r.top20_r.toFixed(3),r.top10_n].join(','))].join('\n')+'\n');
+  fs.writeFileSync(LOG+'/analyse/aktuell.json',JSON.stringify({geo:st.geo,gemessen:new Date().toISOString(),zeiteinheit:TF,tage_daten:days,beispiele:n,
+    erwartung_top10_r:+best.top10_r.toFixed(3),trefferquote_top10:+best.top10_win.toFixed(3),gebuehr_pro_seite:FEE},null,1));
+  console.log(`Aufbau-Analyse (${res.length} Varianten, ${((Date.now()-t0)/1000).toFixed(0)} s): bester Aufbau Stop ${best.sl} ATR / min ${best.minRisk*100}%, Ziel ${best.tp} R, ${best.h} h → Top-10 % ${fmtR(best.top10_r)}`);
+  if(best.top10_r<=0)await push('Kein Vorteil nach Gebühren','Auch der beste getestete Trade-Aufbau verliert nach Gebühren im Schnitt. Bis sich das ändert, kommen kaum Kauf-Signale.',3,'warning');
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
   const t=await j(API+'/ticker/24h');
   const tick24=Object.fromEntries(t.map(x=>[x.market,x]));
-  markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
+  markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
   console.log(`${markets.length} Märkte, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
   await log3m().catch(e=>console.warn('3-Minuten-Log',e.message));
   await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows)});
+  if(st.geo)GEO={...GEO,...st.geo};
+  if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis();
   await trainModel();
   console.log(`Modell: ${model.n} Signale, Basis ${(model.baseWin*100).toFixed(0)}%, Top-10% ${(model.top.win*100).toFixed(0)}%`);
   markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
@@ -276,7 +315,7 @@ async function main(){
     st.notified[key]={s:on,t:now}}
   for(const [mk,p] of Object.entries(st.pos)){const tk=tick24[mk];if(!tk){console.warn('Kein Kurs für',mk);continue}
     const last=+tk.last,a=results[mk]?results[mk].d.A.at(-1):last*0.02;
-    if(p.stop==null){p.stop=p.buy-1.5*a;p.tp=p.buy+2*a;p.high=Math.max(p.buy,last);p.tpHit=false}
+    if(p.stop==null){const R=riskOf(p.buy,a);p.stop=p.buy-R;p.tp=p.buy+GEO.tp*R;p.high=Math.max(p.buy,last);p.tpHit=false}
     p.high=Math.max(p.high,last);
     const adv=advice(mk,p,last);if(last>=p.tp)p.tpHit=true;
     const key='s:'+mk,prev=st.notified[key];
