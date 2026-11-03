@@ -76,9 +76,11 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .scorebar{height:4px;background:var(--chip);border-radius:2px;position:relative;margin-top:4px}
 .scorebar i{position:absolute;top:0;bottom:0;border-radius:2px}
 @media (max-width:620px){
-  .list-head,.row{grid-template-columns:1.2fr .9fr 1fr;}
+  .list-head,.row{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) minmax(0,.6fr) minmax(0,1.05fr);gap:6px;padding-inline:12px}
   .hide-s{display:none}
+  .row .pill{padding:3px 7px;font-size:11px}
 }
+.row .vol{color:var(--muted)}
 /* Detail */
 .detail{padding:16px;display:flex;flex-direction:column;gap:14px;position:sticky;top:12px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
@@ -228,7 +230,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 
   <div class="grid">
     <section class="panel" aria-label="Märkte">
-      <div class="list-head lbl"><span>Markt</span><span>Preis</span><span class="hide-s">24h</span><span class="hide-s">Volumen €</span><span class="hide-s">Treffer-W.</span><span>Signal</span></div>
+      <div class="list-head lbl"><span>Markt</span><span>Preis</span><span class="hide-s">24h</span><span>Vol. 24h</span><span class="hide-s">Treffer-W.</span><span>Signal</span></div>
       <div id="list"><div class="empty">Daten werden von Bitvavo geladen…</div></div>
     </section>
     <aside class="panel detail" id="detail" hidden aria-live="polite"></aside>
@@ -279,7 +281,7 @@ let model=null, lastTrain=0;
 const $=s=>document.querySelector(s);
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
 const fmtP=v=>{if(v==null||isNaN(v))return'–';const a=Math.abs(v);const d=a>=1000?2:a>=1?3:a>=0.01?5:8;return v.toLocaleString('de-CH',{minimumFractionDigits:Math.min(d,2),maximumFractionDigits:d})};
-const fmtV=v=>v>=1e6?(v/1e6).toFixed(2)+' Mio':(v/1e3).toFixed(0)+'k';
+const fmtV=v=>v>=1e6?(v/1e6).toFixed(v>=1e7?0:1)+'M':(v/1e3).toFixed(0)+'K';
 const pct=v=>(v>0?'+':'')+v.toFixed(2)+'%';
 const fmtR=v=>(v>0?'+':'')+v.toFixed(2)+' R';
 const tick=()=>new Promise(r=>setTimeout(r,0));
@@ -617,7 +619,7 @@ function render(){
     <div class="sym">${m.base}${pf.some(p=>p.m===m.market)?'<span class="fire own">BESITZ</span>':''}${trending.has(m.base)?'<span class="fire">TREND</span>':''}<small>${cgInfo[m.base]?.name||m.market}</small></div>
     <div class="num">${fmtP(m.last)}<div class="${m.chg>=0?'up':'down'} num" style="font-size:11px;display:${narrow?'block':'none'}">${pct(m.chg)}</div></div>
     <div class="num hide-s ${m.chg>=0?'up':'down'}">${pct(m.chg)}</div>
-    <div class="num hide-s">${fmtV(m.vol)}</div>
+    <div class="num vol">${fmtV(m.vol)}</div>
     <div class="num hide-s">${(r.p*100).toFixed(0)}%</div>
     <div>${(()=>{const p=pf.find(x=>x.m===m.market);if(!p)return `<span class="pill ${pillCls(r.sig[0])}">${r.sig[1]}</span>${scoreBar(r.score)}`;const a=advice(p);return `<span class="pill ${a.cls}">${a.label}</span><div class="muted num" style="font-size:11px;margin-top:3px">Besitz ${pct(a.pnl)}</div>`})()}</div></div>`}).join('');
 }
