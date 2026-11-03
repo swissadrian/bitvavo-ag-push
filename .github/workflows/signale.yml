@@ -1,0 +1,70 @@
+name: Bitvavo Signale
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'    # alle 5 Minuten (kürzester Takt bei GitHub; Starts kommen oft etwas später)
+  workflow_dispatch:          # manuell starten: Tab "Actions" → "Run workflow"
+
+permissions:
+  contents: write             # zum Speichern des Logbuchs im Branch "logs"
+
+concurrency:
+  group: signale
+  cancel-in-progress: false
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Merkt sich zwischen den Läufen, was schon gemeldet wurde (privat, nicht im Repo)
+      - name: Zustand laden
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Logbuch holen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git clone --quiet --depth 1 --branch logs "$URL" logdata 2>/dev/null; then
+            mkdir logdata && cd logdata && git init --quiet -b logs && git remote add origin "$URL"
+          fi
+
+      - name: Märkte prüfen und Signale senden
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POSITIONS: ${{ secrets.POSITIONS }}
+          TF: ${{ vars.TF || '1h' }}
+          MIN_LEVEL: ${{ vars.MIN_LEVEL || '2' }}
+          LOG_DIR: logdata
+        run: node bot.mjs
+
+      - name: Zustand speichern
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+
+      # Logbuch als einzelner Commit ohne Verlauf speichern: gelöschte Daten belegen danach keinen Platz mehr
+      - name: Logbuch speichern
+        if: always()
+        working-directory: logdata
+        run: |
+          [ -z "$(ls -A | grep -v '^\.git$')" ] && exit 0
+          git config user.name "bitvavo-bot"
+          git config user.email "bitvavo-bot@users.noreply.github.com"
+          git checkout --quiet --orphan neu
+          git add -A
+          git commit --quiet -m "Logbuch Stand $(date -u '+%Y-%m-%d %H:%M') UTC"
+          git push --quiet --force origin neu:logs
