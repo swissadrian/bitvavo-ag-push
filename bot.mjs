@@ -315,6 +315,31 @@ async function geoAnalysis(){
   if(best.top10_r<=0)await push('Kein Vorteil nach Gebühren','Auch der beste getestete Trade-Aufbau verliert nach Gebühren im Schnitt. Bis sich das ändert, kommen kaum Kauf-Signale.',3,'warning');
 }
 
+/* ---------- Rückblick: Hätte das Modell die Gewinner der letzten 24h erkannt? (stündlich) ---------- */
+function retro(){
+  const now=Date.now(),hour=new Date(now).toISOString().slice(0,13);
+  if(st.lastRetro===hour)return;st.lastRetro=hour;
+  const H=Math.round(24/TFH[TF]),cut=now-26*36e5,hb=horBars();
+  const movers=markets.filter(m=>eligible(m)&&data[m.market]&&Math.abs(m.chg)>=10);
+  if(!movers.length)return;
+  // Modell nur mit Daten trainieren, die VOR dem Rückblick-Zeitraum lagen
+  const S=[];for(const d of Object.values(data))for(let i=210;i<d.c.length-hb;i++)if(d.A[i]&&d.ts[i]+hb*TFH[TF]*36e5<cut)S.push({x:feat(d,i),y:outcome(d,i).y});
+  if(S.length<2000)return;
+  const n=S.length,X=new Float64Array(n*K),Y=new Float64Array(n);S.forEach((s,i)=>{for(let k=0;k<K;k++)X[i*K+k]=s.x[k];Y[i]=s.y});
+  const mp=fit(X,Y,n,120),allP=[];for(let i=0;i<n;i+=Math.max(1,Math.floor(n/3000)))allP.push(predict(mp,S[i].x));allP.sort((a,b)=>a-b);
+  const evOf=p=>{let lo=0,hi=allP.length;while(lo<hi){const m=(lo+hi)>>1;allP[m]<p?lo=m+1:hi=m}return model.buckets[Math.min(9,Math.floor(lo/allP.length*10))].r};
+  const rows=[];
+  for(const m of movers){const d=data[m.market],N=d.c.length-1;let best=null;
+    for(let i=N-H;i<N;i++){const p=predict(mp,feat(d,i)),ev=evOf(p);if(!best||ev>best.ev||(ev===best.ev&&p>best.p))best={i,p,ev}}
+    const sig=best.ev>=.25?'Starker Kauf':best.ev>=.08?'Kauf':best.ev>-.08?'Neutral':'Meiden';
+    rows.push([hour,m.market,m.chg.toFixed(1),iso(d.ts[best.i]),best.p.toFixed(3),best.ev.toFixed(3),sig,d.c[best.i],d.c[N],((d.c[N]/d.c[best.i]-1)*100).toFixed(1)]);}
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});
+  const f=LOG+'/analyse/rueckblick.csv',head='erstellt_utc,markt,veraenderung_24h_pct,beste_stunde_utc,treffer_wahrsch,erwartung_r,signal_damals,kurs_damals,kurs_jetzt,seither_pct';
+  const old=fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').slice(1).filter(l=>l.slice(0,10)>=new Date(now-30*864e5).toISOString().slice(0,10)):[];
+  fs.writeFileSync(f,[head,...old,...rows.map(r=>r.join(','))].join('\n')+'\n');
+  console.log(`Rückblick: ${rows.length} Coins mit ±10 % in 24h ausgewertet.`);
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -363,6 +388,7 @@ async function main(){
   if(buys.length>4)await push(`${buys.length-4} weitere Kauf-Signale`,buys.slice(4).map(b=>b.t.split(': ')[1]).join(', '),3);
   if(!st.ok)await push('Bitvavo-Bot läuft wieder','Daten werden wieder normal abgerufen.',2,'white_check_mark');
   st.ok=true;
+  try{retro()}catch(e){console.warn('Rückblick',e.message)}
   logRun(buys);
   console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
