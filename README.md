@@ -39,28 +39,29 @@ Zu enge Stops verlieren schon durch die Gebühren. Ein Stop von 1 ATR auf dem 1h
 
 ## Logbuch
 
-Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC.
+Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC. Je älter die Daten, desto gröber werden sie gespeichert:
 
-| Ordner | Inhalt | Auflösung | Aufbewahrung |
-|---|---|---|---|
-| `kurse/3min/` | Open, High, Low, Close, Volumen aller Märkte der Beobachtungsliste | 3 Minuten | 1 Jahr |
-| `kurse/1h/` | dasselbe, verdichtet | 1 Stunde | Jahr 2 und 3 |
-| `signale/` | Preis, Volumen 24h und 3 Tage, RSI, Trefferwahrscheinlichkeit, Erwartung, Signal je Markt | jeder Lauf (≈ 5 Min) | 30 Tage |
-| `signale-1h/` | dasselbe, ein Wert pro Stunde | 1 Stunde | bis 3 Jahre |
-| `laeufe/` | Zusammenfassung pro Lauf, Modellqualität | jeder Lauf | 3 Jahre |
-| `meldungen/` | gesendete Kauf-Signale | | 3 Jahre |
+| Alter der Daten | Kurse (Open, High, Low, Close, Volumen) | Signale je Markt |
+|---|---|---|
+| bis 30 Tage | 1 Minute · `kurse/1m/` | jeder Lauf (≈ 5 Min) · `signale/lauf/` |
+| 30 Tage bis 3 Monate | 5 Minuten · `kurse/5m/` | 1 Stunde · `signale/1h/` |
+| 3 bis 6 Monate | 30 Minuten · `kurse/30m/` | 1 Stunde |
+| 6 Monate bis 1 Jahr | 1 Stunde · `kurse/1h/` | 1 Stunde |
+| 1 bis 3 Jahre | 24 Stunden · `kurse/24h/` | 24 Stunden · `signale/24h/` |
+| älter als 3 Jahre | gelöscht | gelöscht |
 
-Abgeschlossene Tage werden als `.csv.gz` gepackt. Nach 3 Jahren wird alles gelöscht. Der Branch wird bei jedem Lauf als einzelner Commit ohne Verlauf gespeichert, sodass gelöschte Daten wirklich keinen Platz mehr belegen.
+Dazu kommen `laeufe/` mit einer Zusammenfassung pro Lauf und `meldungen/` mit den gesendeten Kauf-Signalen. Beides wird nach 3 Jahren gelöscht.
 
-Die 3-Minuten-Werte stammen aus den 1-Minuten-Kerzen von Bitvavo. Deshalb gibt es sie lückenlos, obwohl der Bot nur etwa alle 5 Minuten läuft.
+Die neuesten Daten liegen in Stundendateien (`JJJJ-MM-TT-HH.csv`), ältere in gepackten Tagesdateien (`.csv.gz`). Die 1-Minuten-Werte stammen direkt von Bitvavo und sind deshalb lückenlos, obwohl der Bot nur etwa alle 5 Minuten läuft. Der Branch wird jedes Mal als einzelner Commit ohne Verlauf gespeichert, sodass gelöschte Daten wirklich keinen Platz mehr belegen.
 
-**Platz:** rund 5 MB pro Markt und Jahr. Bei 100 Märkten etwa 500 MB, bei 150 Märkten etwa 700 MB, danach stabil, weil Altes verdichtet und gelöscht wird. GitHub empfiehlt Repositories unter 1 GB. Die Anzahl Märkte steht in `laeufe/` (Spalte `maerkte`).
+**Platz:** rund 1,6 MB pro Markt, und das bleibt stabil, weil Altes laufend verdichtet und gelöscht wird. Bei 150 Märkten sind das etwa 250 MB, bei 250 Märkten etwa 400 MB. GitHub empfiehlt Repositories unter 1 GB. Die Anzahl Märkte steht in `laeufe/` (Spalte `maerkte`).
 
 Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil das Repository öffentlich ist.
 
 ## Gut zu wissen
 
 - Beim ersten Lauf kommen alle aktuell aktiven Kauf-Signale auf einmal, höchstens 4 einzeln und der Rest zusammengefasst.
+- Die Radar-App läuft unter https://swissadrian.github.io/bitvavo-ag-push/ (Ordner `docs/`).
 - 5 Minuten ist der kürzeste Takt, den GitHub erlaubt. Bei hoher Last startet GitHub Läufe verspätet oder lässt einzelne aus, rechne also eher mit 5–15 Minuten.
 - Bei öffentlichen Repositories pausiert GitHub geplante Läufe nach 60 Tagen ohne Commit. Dann einfach eine kleine Änderung committen, zum Beispiel in dieser README.
 - Fällt der Datenabruf aus, kommt eine Fehlermeldung und eine Entwarnung, sobald es wieder läuft.

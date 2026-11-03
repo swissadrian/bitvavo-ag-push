@@ -136,7 +136,7 @@ const TOPIC=(process.env.NTFY_TOPIC||'').trim();
 const CMD=TOPIC?TOPIC+'-cmd':'';                         // Kanal für Kauf/Verkauf-Eingaben aus der App
 const LEVEL=+(process.env.MIN_LEVEL||2);                 // 2 = nur Starker Kauf, 1 = ab Kauf
 const LOG=process.env.LOG_DIR||'logdata', T0=Date.now();
-const DAY_MS=864e5, FULL_DAYS=365, SIG_DAYS=30, KEEP_YEARS=3;   // 3-Min-Kurse 1 Jahr, Signale je Lauf 30 Tage
+const DAY_MS=864e5;
 
 /* ---------- Zustand: verschlüsselt im Logbuch (nur mit deinem ntfy-Kanal lesbar) ---------- */
 const STATE_FILE=LOG+'/zustand.enc';
@@ -199,7 +199,14 @@ function advice(mk,p,last){
   return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} €, Ziel ${fmtP(p.tp)} €`};
 }
 
-/* ---------- Logbuch ---------- */
+/* ---------- Logbuch ----------
+   Kurse:   1 Min bis 30 Tage → 5 Min bis 3 Monate → 30 Min bis 6 Monate → 1 h bis 1 Jahr → 24 h bis 3 Jahre → gelöscht
+   Signale: jeder Lauf bis 30 Tage → 1 h bis 1 Jahr → 24 h bis 3 Jahre → gelöscht
+   Alter = Alter der Daten. Die jeweils neueste Stufe liegt in Stundendateien, ältere in gepackten Tagesdateien. */
+const TIERS={
+  kurse:[{res:1,dir:'kurse/1m',days:30},{res:5,dir:'kurse/5m',days:91},{res:30,dir:'kurse/30m',days:182},{res:60,dir:'kurse/1h',days:365},{res:1440,dir:'kurse/24h',days:1095}],
+  signale:[{res:0,dir:'signale/lauf',days:30},{res:60,dir:'signale/1h',days:365},{res:1440,dir:'signale/24h',days:1095}],
+};
 const iso=ts=>new Date(ts).toISOString().slice(0,16).replace('T',' ');
 const dayOf=ts=>new Date(ts).toISOString().slice(0,10);
 const csvq=v=>{v=v==null?'':String(v);return /[",\n;]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
@@ -208,61 +215,75 @@ function appendCsv(rel,header,rows){
   if(!fs.existsSync(f))fs.writeFileSync(f,header.join(',')+'\n');
   fs.appendFileSync(f,rows.map(r=>r.map(csvq).join(',')).join('\n')+'\n');
 }
-const H3=['zeit_utc','markt','open','high','low','close','volumen'];
+const hourFile=(dir,ts)=>{const t=iso(ts);return `${dir}/${t.slice(0,7)}/${t.slice(0,10)}-${t.slice(11,13)}.csv`};
+const HK=['zeit_utc','markt','open','high','low','close','volumen'];
 const HS=['zeit_utc','markt','preis_eur','volumen_24h_eur','volumen_3t_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'];
-// 1-Minuten-Kerzen von Bitvavo zu 3-Minuten-Werten zusammenfassen
-async function log3m(){
-  const now=Date.now(),rows={};
+// 1-Minuten-Kerzen aller Märkte der Beobachtungsliste seit dem letzten Lauf
+async function log1m(){
+  const now=Date.now(),byFile={};st.last1m=st.last1m||{};
   await pool(markets.filter(eligible),5,async m=>{
-    const last=st.last3m[m.market]||now-60*60e3;
-    const lim=Math.round(clip((now-last)/60e3+6,10,1440));
+    const last=st.last1m[m.market]||st.last3m?.[m.market]||now-60*60e3;
+    const lim=Math.round(clip((now-last)/60e3+5,5,1440));
     const c=(await j(`${API}/${m.market}/candles?interval=1m&limit=${lim}`)).slice().reverse();
-    const b=new Map();
-    for(const k of c){const ts=+k[0],s=Math.floor(ts/18e4)*18e4;if(s<=last||s+18e4>now-30e3)continue;
-      const x=b.get(s);if(!x)b.set(s,[s,+k[1],+k[2],+k[3],+k[4],+k[5]]);else{x[2]=Math.max(x[2],+k[2]);x[3]=Math.min(x[3],+k[3]);x[4]=+k[4];x[5]+=+k[5]}}
-    for(const x of [...b.values()].sort((a,b)=>a[0]-b[0])){const d=dayOf(x[0]);(rows[d]||(rows[d]=[])).push([iso(x[0]),m.market,x[1],x[2],x[3],x[4],+x[5].toFixed(8)]);st.last3m[m.market]=x[0]}
+    for(const k of c){const ts=+k[0];if(ts<=last||ts+60e3>now-5e3)continue;
+      (byFile[hourFile(TIERS.kurse[0].dir,ts)]||(byFile[hourFile(TIERS.kurse[0].dir,ts)]=[])).push([iso(ts),m.market,k[1],k[2],k[3],k[4],k[5]]);
+      st.last1m[m.market]=Math.max(st.last1m[m.market]||0,ts)}
   });
-  let n=0;for(const d of Object.keys(rows).sort()){rows[d].sort((a,b)=>a[0]<b[0]?-1:1);appendCsv(`kurse/3min/${d.slice(0,4)}/${d}.csv`,H3,rows[d]);n+=rows[d].length}
-  console.log(`${n} neue 3-Minuten-Werte geloggt.`);
+  let n=0;for(const f of Object.keys(byFile).sort()){byFile[f].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);appendCsv(f,HK,byFile[f]);n+=byFile[f].length}
+  console.log(`${n} neue 1-Minuten-Werte geloggt.`);
 }
 function logRun(buys){
-  const now=Date.now(),d=dayOf(now),t=iso(now),all=Object.values(results);
-  appendCsv(`signale/${d.slice(0,4)}/${d}.csv`,HS,markets.filter(m=>results[m.market]&&eligible(m)).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),Math.round(m.vol3d),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
-  appendCsv(`laeufe/${d.slice(0,7)}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden_verkaufen','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
+  const now=Date.now(),t=iso(now),mon=t.slice(0,7),all=Object.values(results);
+  appendCsv(hourFile(TIERS.signale[0].dir,now),HS,markets.filter(m=>results[m.market]&&eligible(m)).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),Math.round(m.vol3d),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
+  appendCsv(`laeufe/${mon}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
     [[t,TF,markets.filter(eligible).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((now-T0)/1000).toFixed(0)]]);
-  appendCsv(`meldungen/${d.slice(0,7)}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
+  appendCsv(`meldungen/${mon}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
 }
-/* Aufräumen: abgeschlossene Tage packen, nach 1 Jahr auf Stundenwerte verdichten, nach 3 Jahren löschen */
-function files(dir){const out=[];if(!fs.existsSync(dir))return out;for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=dir+'/'+e.name;if(e.isDirectory())out.push(...files(p));else out.push(p)}return out}
-function readCsv(p){const t=p.endsWith('.gz')?zlib.gunzipSync(fs.readFileSync(p)).toString('utf8'):fs.readFileSync(p,'utf8');const [h,...r]=t.trim().split('\n');return{h,rows:r}}
+
+/* ---------- Aufräumen und Verdichten ---------- */
+function files(dir){const out=[];if(!fs.existsSync(dir))return out;for(const e of fs.readdirSync(dir,{withFileTypes:true})){if(e.name==='.git')continue;const p=dir+'/'+e.name;if(e.isDirectory())out.push(...files(p));else out.push(p)}return out}
+function readCsv(p){const t=p.endsWith('.gz')?zlib.gunzipSync(fs.readFileSync(p)).toString('utf8'):fs.readFileSync(p,'utf8');const [h,...r]=t.trim().split('\n');return{h,rows:r.filter(Boolean)}}
+const bucket=(t,res)=>{if(res>=1440)return t.slice(0,10)+' 00:00';const mins=+t.slice(11,13)*60+ +t.slice(14,16),b=Math.floor(mins/res)*res;return t.slice(0,11)+String(Math.floor(b/60)).padStart(2,'0')+':'+String(b%60).padStart(2,'0')};
+const nfmt=v=>String(+(+v).toPrecision(10));
+function aggregate(kind,rows,res){
+  const out=new Map();
+  for(const r of rows.slice().sort()){const c=r.split(','),k=bucket(c[0],res)+'|'+c[1],x=out.get(k);
+    if(kind==='signale'){if(!x)out.set(k,[bucket(c[0],res),...c.slice(1)]);continue}
+    if(!x)out.set(k,[bucket(c[0],res),c[1],+c[2],+c[3],+c[4],+c[5],+c[6]]);
+    else{x[3]=Math.max(x[3],+c[3]);x[4]=Math.min(x[4],+c[4]);x[5]=+c[5];x[6]+=+c[6]}}
+  return [...out.values()].map(x=>kind==='signale'?x.join(','):[x[0],x[1],...x.slice(2).map(nfmt)].join(','));
+}
+function writeDay(dir,day,h,rows){
+  const f=`${LOG}/${dir}/${day.slice(0,4)}/${day}.csv.gz`;fs.mkdirSync(path.dirname(f),{recursive:true});
+  if(fs.existsSync(f)){const old=readCsv(f);rows=[...old.rows,...rows]}
+  fs.writeFileSync(f,zlib.gzipSync([h,...rows].join('\n')+'\n',{level:9}));
+}
 function housekeeping(){
-  const today=dayOf(Date.now()),cutFull=dayOf(Date.now()-FULL_DAYS*DAY_MS),cutSig=dayOf(Date.now()-SIG_DAYS*DAY_MS),cutAll=new Date();cutAll.setUTCFullYear(cutAll.getUTCFullYear()-KEEP_YEARS);
-  const cutAllDay=dayOf(cutAll),cutAllMon=cutAllDay.slice(0,7);let packed=0,thinned=0,deleted=0;
-  for(const p of files(LOG)){
-    if(p.includes('/.git/'))continue;
-    const m=path.basename(p).match(/^(\d{4}-\d{2})(-\d{2})?\.csv(\.gz)?$/);if(!m)continue;
-    const day=m[2]?m[1]+m[2]:null;
-    // 3 Jahre: alles löschen
-    if(day?day<cutAllDay:m[1]<cutAllMon){fs.unlinkSync(p);deleted++;continue}
-    if(!day)continue;
-    // Nach 1 Jahr: nur noch Stundenwerte
-    if((day<cutFull&&p.includes('/kurse/3min/'))||(day<cutSig&&p.includes('/signale/'))){
-      const {h,rows}=readCsv(p),hourly=new Map();
-      if(p.includes('/kurse/3min/')){for(const r of rows){const c=r.split(','),k=c[0].slice(0,13)+':00|'+c[1],x=hourly.get(k);
-          if(!x)hourly.set(k,[c[0].slice(0,13)+':00',c[1],+c[2],+c[3],+c[4],+c[5],+c[6]]);else{x[3]=Math.max(x[3],+c[3]);x[4]=Math.min(x[4],+c[4]);x[5]=+c[5];x[6]+=+c[6]}}
-        const out=[...hourly.values()].map(x=>{x[6]=+x[6].toFixed(8);return x.join(',')});
-        const dest=p.replace('/kurse/3min/','/kurse/1h/');fs.mkdirSync(path.dirname(dest),{recursive:true});
-        fs.writeFileSync(dest.endsWith('.gz')?dest:dest+'.gz',zlib.gzipSync([h,...out].join('\n')+'\n',{level:9}));}
-      else{for(const r of rows){const k=r.slice(0,13)+'|'+r.split(',')[1];if(!hourly.has(k))hourly.set(k,r)}
-        const dest=p.replace('/signale/','/signale-1h/');fs.mkdirSync(path.dirname(dest),{recursive:true});
-        fs.writeFileSync(dest.endsWith('.gz')?dest:dest+'.gz',zlib.gzipSync([h,...hourly.values()].join('\n')+'\n',{level:9}));}
-      fs.unlinkSync(p);thinned++;continue;
-    }
-    // Abgeschlossene Tage komprimieren
-    if(!m[3]&&day<today){fs.writeFileSync(p+'.gz',zlib.gzipSync(fs.readFileSync(p),{level:9}));fs.unlinkSync(p);packed++;continue}
+  const now=Date.now(),curHour=hourFile('',now).slice(-17,-4);let packed=0,thinned=0,deleted=0;
+  // Abgeschlossene Stundendateien packen
+  for(const p of files(LOG)){const m=path.basename(p).match(/^(\d{4}-\d{2}-\d{2}-\d{2})\.csv$/);if(m&&m[1]<curHour){fs.writeFileSync(p+'.gz',zlib.gzipSync(fs.readFileSync(p),{level:9}));fs.unlinkSync(p);packed++}}
+  // Ältere Stufen verdichten bzw. löschen
+  for(const [kind,tiers] of Object.entries(TIERS)){
+    tiers.forEach((tier,i)=>{
+      const cut=dayOf(now-tier.days*DAY_MS),byDay={};
+      for(const p of files(`${LOG}/${tier.dir}`)){const m=path.basename(p).match(/^(\d{4}-\d{2}-\d{2})/);if(m&&m[1]<cut)(byDay[m[1]]||(byDay[m[1]]=[])).push(p)}
+      for(const [day,ps] of Object.entries(byDay)){
+        const next=tiers[i+1];
+        if(next){let h='',rows=[];for(const p of ps){const x=readCsv(p);h=x.h;rows.push(...x.rows)}writeDay(next.dir,day,h,aggregate(kind,rows,next.res));thinned++}
+        else deleted++;
+        ps.forEach(p=>fs.unlinkSync(p));
+      }
+    });
   }
+  // Übernahme aus älteren Versionen des Bots
+  for(const p of files(`${LOG}/kurse/3min`)){const x=readCsv(p),day=path.basename(p).slice(0,10);writeDay('kurse/5m',day,x.h,aggregate('kurse',x.rows,5));fs.unlinkSync(p);thinned++}
+  for(const p of files(`${LOG}/signale`).filter(p=>/signale\/\d{4}\//.test(p))){const x=readCsv(p),day=path.basename(p).slice(0,10);writeDay('signale/1h',day,x.h,aggregate('signale',x.rows,60));fs.unlinkSync(p);thinned++}
+  for(const p of files(`${LOG}/markt`)){fs.unlinkSync(p);deleted++}
+  // Monatsdateien (Läufe, Meldungen) nach 3 Jahren löschen
+  const cutMon=dayOf(now-1095*DAY_MS).slice(0,7);
+  for(const p of [...files(`${LOG}/laeufe`),...files(`${LOG}/meldungen`)]){const m=path.basename(p).match(/^(\d{4}-\d{2})\.csv/);if(m&&m[1]<cutMon){fs.unlinkSync(p);deleted++}}
   const prune=d=>{if(!fs.existsSync(d))return;for(const e of fs.readdirSync(d,{withFileTypes:true}))if(e.isDirectory()&&e.name!=='.git'){prune(d+'/'+e.name);if(!fs.readdirSync(d+'/'+e.name).length)fs.rmdirSync(d+'/'+e.name)}};prune(LOG);
-  if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Tage gepackt, ${thinned} auf Stundenwerte verdichtet, ${deleted} älter als ${KEEP_YEARS} Jahre gelöscht.`);
+  if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Stunden gepackt, ${thinned} Tage verdichtet, ${deleted} gelöscht.`);
 }
 
 /* ---------- Welcher Trade-Aufbau lohnt sich nach Gebühren? (einmal pro Woche) ---------- */
@@ -307,7 +328,7 @@ async function main(){
   markets=markets.filter(m=>data[m.market]&&(eligible(m)||st.pos[m.market]));
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
   console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
-  await log3m().catch(e=>console.warn('3-Minuten-Log',e.message));
+  await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
   if(st.geo)GEO={...GEO,...st.geo};
   if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis();
   await trainModel();
