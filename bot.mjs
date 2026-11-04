@@ -475,7 +475,7 @@ async function longTrain(){
   setFeatSet(st.featSet||'v1');
   const t1=Date.now();
   await trainModel(hist,Math.max(1,Math.round(inWin/450000)),minTs);
-  st.model=packModel(model);st.modelAt=Date.now();
+  st.model=packModel(model);st.modelAt=Date.now();st.longTryAt=0;   // Sperre nur nach Fehlschlägen
   fs.mkdirSync(LOG+'/analyse',{recursive:true});
   fs.writeFileSync(LOG+'/analyse/modell.json',JSON.stringify({...st.model,merkmal_namen:ACTIVE.map(F=>F.n),gebuehr_pro_seite:FEE}));
   console.log(`Langzeitmodell (${winDays()} Tage): ${model.n.toLocaleString('de-CH')} Signale, ${model.from.toISOString().slice(0,10)} bis ${model.to.toISOString().slice(0,10)}, Basis ${(model.baseWin*100).toFixed(0)} %, Top-10 % ${(model.top.win*100).toFixed(0)} % / ${fmtR(model.top.r)} (${((Date.now()-t1)/1e3).toFixed(0)} s)`);
