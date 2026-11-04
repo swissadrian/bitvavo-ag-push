@@ -120,6 +120,14 @@ const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 function outcome(d,i){
   return outcomeG(d,i,GEO);
 }
+// Wette auf fallende Kurse (Short): Ziel unter dem Einstieg, Stop darüber; Gebühren und Leihzins (ca. 13 % p. a.) in R
+const BORROW_H=0.000015;
+function outcomeShort(d,i,g=GEO){
+  const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e-g.tp*R,sl=e+R,H=Math.max(2,Math.round(g.h/TFH[TF]));
+  const cost=k=>(2*FEE+BORROW_H*(k-i)*TFH[TF])*e/R;
+  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.h[k]>=sl)return{y:0,r:-1-cost(k)};if(d.l[k]<=tp)return{y:1,r:g.tp-cost(k)}}
+  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(e-d.c[k])/R-cost(k)};
+}
 function outcomeG(d,i,g){
   const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e+g.tp*R,sl=e-R,H=Math.max(2,Math.round(g.h/TFH[TF]));
   const fee=2*FEE*e/R; // Bitvavo-Gebühr für Kauf und Verkauf, in R
@@ -145,10 +153,10 @@ function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++){const v=x[k];if(v=
 function contrib(m,x){return x.map((v,k)=>v===v?m.w[k]*(v-m.mu[k])/m.sd[k]:0)}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
-async function trainModel(src=data,stride=1,minTs=0,maxTs=Infinity){
+async function trainModel(src=data,stride=1,minTs=0,maxTs=Infinity,outFn=outcome){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs||d.ts[i]>=maxTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs||d.ts[i]>=maxTs)continue;const o=outFn(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -679,36 +687,38 @@ async function paperStep(){
 const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
 
 /* ---------- Rückwärtstest: Wie hätte ein API-Bot in den letzten 12 Monaten abgeschnitten? (einmalig je Version) ---------- */
-// Walk-forward: Für jeden Monat wird das Modell nur mit den 12 Monaten davor trainiert. Signale werden einmal berechnet,
-// danach werden mehrere Handelsregeln durchgespielt (100 € pro Trade, Start 1'000 €, max. 10 Positionen, Kosten inkl. Spread).
-const BT_V=2;
+// Walk-forward: Für jeden Monat werden ein Kauf-Modell und ein Short-Modell nur mit den 12 Monaten davor trainiert.
+// Danach werden mehrere Regeln durchgespielt (100 € pro Trade ohne Hebel, Start 1'000 €, max. 10 Positionen, Kosten inkl. Spread und Leihzins).
+const BT_V=3;
 function simulate(hist,idx,sig,hours,months,now,o){
-  const step=36e5,S={cash:1000,pos:{},pend:{}},trades=[],eq=[],prevOn={};let mi=0;
-  const hsOf=mk=>o.spread?o.hs(mk):0;
-  const val=t=>{let v=S.cash+Object.keys(S.pend).length*100;for(const [mk,x] of Object.entries(S.pos)){const d=hist[mk];let i=idx[mk].get(t);if(i==null)i=x.li;v+=x.q*d.c[i]*(1-hsOf(mk))*(1-PAPER.taker)}return v};
+  const step=36e5,S={cash:1000,pos:{}},trades=[],eq=[],prevOn={};let mi=0;
+  const hsOf=mk=>o.spread===false?0:o.hs(mk);
+  const mark=(x,px)=>x.side>0?x.q*px*(1-hsOf(x.mk))*(1-PAPER.taker):x.cost+(x.entry-px*(1+hsOf(x.mk)))*x.q-x.q*px*PAPER.taker;
+  const val=t=>{let v=S.cash;for(const x of Object.values(S.pos)){const d=hist[x.mk];let i=idx[x.mk].get(t);if(i==null)i=x.li;v+=mark(x,d.c[i])}return v};
   for(const t of hours){
     while(mi+1<months.length&&t>=months[mi+1]){eq.push(val(months[mi+1]-step));mi++}
-    for(const [mk,od] of Object.entries(S.pend)){const d=hist[mk],i=idx[mk].get(t);delete S.pend[mk];S.cash+=100;if(i==null)continue;
-      if(d.l[i]<=od.L){S.cash-=100;S.pos[mk]={entry:od.L,q:100/(od.L*(1+PAPER.maker)),cost:100,t,R:od.R,stop:od.L-od.R,tp:od.L+GEO.tp*od.R,high:od.L,fill:true,li:i}}}
-    for(const [mk,x] of Object.entries(S.pos)){const d=hist[mk],i=idx[mk].get(t);if(i==null)continue;x.li=i;const hs=hsOf(mk);let px=null,why='';
-      if(x.fill){x.fill=false;continue}
-      if(d.l[i]<=x.stop){px=Math.min(x.stop,d.o[i])*(1-hs);why=x.stop>x.entry?'Nachziehender Stop':'Stop-Loss'}
-      else if(d.h[i]>=x.tp){px=o.limit?x.tp:x.tp*(1-hs);why='Ziel'}
-      else{x.high=Math.max(x.high,d.h[i]);if(o.trail&&x.high>=x.entry+x.R)x.stop=Math.max(x.stop,x.high-x.R);
-        const s=sig[mk]?.get(t);
-        if(t+step-x.t>=GEO.h*36e5){px=d.c[i]*(1-hs);why='Haltedauer'}else if(o.sellSig&&s&&s.q<=1){px=d.c[i]*(1-hs);why='Verkaufssignal'}}
-      if(px!=null){const fee=why==='Ziel'&&o.limit?PAPER.maker:PAPER.taker,net=x.q*px*(1-fee);S.cash+=net;trades.push({mk,t:x.t,res:net-x.cost,why,m:new Date(x.t).toISOString().slice(0,7)});delete S.pos[mk]}}
-    for(const [mk,m] of Object.entries(sig)){const s=m.get(t);if(!s)continue;const on=o.entry(s)&&s.elig,prev=prevOn[mk];prevOn[mk]=on;if(!on||prev)continue;
-      if(S.pos[mk]||S.pend[mk]||Object.keys(S.pos).length+Object.keys(S.pend).length>=PAPER.maxPos||S.cash<100)continue;
-      const d=hist[mk],i=s.i,hs=hsOf(mk),R=riskOf(d.c[i],d.A[i]);S.cash-=100;
-      if(o.limit)S.pend[mk]={L:d.c[i]*(1-hs),R};else{const e=d.c[i]*(1+hs);S.pos[mk]={entry:e,q:100/(e*(1+PAPER.taker)),cost:100,t:t+step,R,stop:e-R,tp:e+GEO.tp*R,high:e,li:i}}}
+    for(const [key,x] of Object.entries(S.pos)){const d=hist[x.mk],i=idx[x.mk].get(t);if(i==null)continue;x.li=i;const hs=hsOf(x.mk);let px=null,why='';
+      const L=x.side>0;
+      if(L?d.l[i]<=x.stop:d.h[i]>=x.stop){px=L?Math.min(x.stop,d.o[i]):Math.max(x.stop,d.o[i]);why='Stop-Loss'}
+      else if(L?d.h[i]>=x.tp:d.l[i]<=x.tp){px=x.tp;why='Ziel'}
+      else if(t+step-x.t>=GEO.h*36e5){px=d.c[i];why='Haltedauer'}
+      if(px!=null){let net;
+        if(L)net=x.q*px*(1-hs)*(1-PAPER.taker);
+        else{const buy=px*(1+hs),hrs=(t+step-x.t)/36e5;net=x.cost+(x.entry-buy)*x.q-x.q*buy*PAPER.taker-x.cost*BORROW_H*hrs}
+        S.cash+=net;trades.push({side:x.side,res:net-x.cost,why,m:new Date(x.t).toISOString().slice(0,7)});delete S.pos[key]}}
+    for(const [mk,m] of Object.entries(sig)){const s=m.get(t);if(!s||!s.elig)continue;
+      for(const side of [1,-1]){const want=side>0?o.long&&o.long(s):o.short&&o.short(s)&&s.shortbar;const key=(side>0?'L:':'S:')+mk,on=!!want,prev=prevOn[key];prevOn[key]=on;if(!on||prev)continue;
+        if(S.pos['L:'+mk]||S.pos['S:'+mk]||Object.keys(S.pos).length>=PAPER.maxPos||S.cash<100)continue;
+        const d=hist[mk],i=s.i,hs=hsOf(mk),R=riskOf(d.c[i],d.A[i]);S.cash-=100;
+        if(side>0){const e=d.c[i]*(1+hs);S.pos[key]={mk,side,entry:e,q:100/(e*(1+PAPER.taker)),cost:100,t:t+step,R,stop:e-R,tp:e+GEO.tp*R,li:i}}
+        else{const e=d.c[i]*(1-hs),q=100/(e*(1+PAPER.taker));S.pos[key]={mk,side,entry:e,q,cost:100,t:t+step,R,stop:e+R,tp:e-GEO.tp*R,li:i}}}}
   }
   while(eq.length<months.length)eq.push(val(now-now%step-step));
-  let prev=1000;const monate=months.map((m,k)=>{const r={monat:new Date(m).toISOString().slice(0,7),pct:+((eq[k]-prev)/10).toFixed(2),trades:trades.filter(x=>x.m===new Date(m).toISOString().slice(0,7)).length};prev=eq[k];return r});
-  const res=trades.map(x=>x.res),w=res.filter(r=>r>0);
-  return{ende:+eq.at(-1).toFixed(2),gesamt_pct:+((eq.at(-1)-1000)/10).toFixed(2),trades:trades.length,gewinner_pct:trades.length?Math.round(w.length/trades.length*100):0,
-    schnitt_eur:trades.length?+(res.reduce((a,b)=>a+b,0)/trades.length).toFixed(2):0,gruende:Object.fromEntries([...new Set(trades.map(x=>x.why))].map(g=>[g,trades.filter(x=>x.why===g).length])),monate,
-    tiefster_stand:+Math.min(1000,...eq).toFixed(2)};
+  let prev=1000;const monate=months.map((m,k)=>{const mm=new Date(m).toISOString().slice(0,7),r={monat:mm,pct:+((eq[k]-prev)/10).toFixed(2),trades:trades.filter(x=>x.m===mm).length};prev=eq[k];return r});
+  const res=trades.map(x=>x.res),w=res.filter(r=>r>0),sh=trades.filter(x=>x.side<0);
+  return{gesamt_pct:+((eq.at(-1)-1000)/10).toFixed(2),tiefster_stand:+Math.min(1000,...eq).toFixed(2),trades:trades.length,shorts:sh.length,
+    short_ergebnis:+sh.reduce((a,x)=>a+x.res,0).toFixed(2),long_ergebnis:+trades.filter(x=>x.side>0).reduce((a,x)=>a+x.res,0).toFixed(2),
+    gewinner_pct:trades.length?Math.round(w.length/trades.length*100):0,schnitt_eur:trades.length?+(res.reduce((a,b)=>a+b,0)/trades.length).toFixed(2):0,monate};
 }
 async function backtest(){
   if(st.btV===BT_V)return;const t0=Date.now();
@@ -717,39 +727,40 @@ async function backtest(){
   setBtc(hist);await loadFgHistory();setFeatSet(st.featSet||'v1');if(st.geo)GEO={...GEO,...st.geo};
   let live={};try{live=JSON.parse(fs.readFileSync(LOG+'/analyse/live.json','utf8')).orderbuch||{}}catch(e){}
   const hs=mk=>clip((live[mk]?.spread??0.3)/200,0.0002,0.01);
+  // Short nur auf grossen Coins (Bitvavo: «20+ Assets» mit Hebel); Annahme: die 25 umsatzstärksten
+  const shortable=new Set(markets.filter(eligible).sort((a,b)=>b.vol-a.vol).slice(0,25).map(m=>m.market));
   const step=36e5,H=horBars(),now=Date.now(),months=[];
   for(let k=12;k>=0;k--){const d=new Date(now);d.setUTCDate(1);d.setUTCHours(0,0,0,0);d.setUTCMonth(d.getUTCMonth()-k);months.push(+d)}
   const idx={};for(const [mk,d] of Object.entries(hist)){const m=new Map();d.ts.forEach((t,i)=>m.set(t,i));idx[mk]=m}
   const vEur=(d,i,n)=>{let s=0;for(let k=Math.max(0,i-n+1);k<=i;k++)s+=d.v[k]*d.c[k];return s};
-  // Signale je Monat mit dem Modell, das nur die Vergangenheit kennt
-  const sig={},diag=[],hours=[];
+  const sig={},diag=[],hours=[],stride=Math.max(1,Math.round(Object.values(hist).reduce((s,d)=>s+d.c.length,0)/2/450000));
   for(let mi=0;mi<months.length;mi++){
     const mStart=months[mi],mEnd=mi+1<months.length?months[mi+1]:now;
-    await trainModel(hist,Math.max(1,Math.round(Object.values(hist).reduce((s,d)=>s+d.c.length,0)/2/450000)),mStart-365*DAY_MS,mStart-H*step);
-    let n2=0,n1=0,n9=0,cnt=0;
+    await trainModel(hist,stride,mStart-365*DAY_MS,mStart-H*step);const mL=model;
+    await trainModel(hist,stride,mStart-365*DAY_MS,mStart-H*step,outcomeShort);const mS=model;
+    let nL=0,nS=0;
     for(let t=Math.ceil(mStart/step)*step;t<mEnd;t+=step){hours.push(t);
-      for(const [mk,d] of Object.entries(hist)){const i=idx[mk].get(t);if(i==null||i<210||!d.A[i])continue;
-        const c=calib(predict(model,feat(d,i))),lvl=c.r>=.25?2:c.r>=.08?1:0,elig=vEur(d,i,24)>=MIN_VOL&&vEur(d,i,72)>=MIN_VOL3D;
-        (sig[mk]||(sig[mk]=new Map())).set(t,{q:c.q,lvl,i,elig});cnt++;if(lvl>=2)n2++;if(lvl>=1)n1++;if(c.q===9)n9++}}
-    diag.push({monat:new Date(mStart).toISOString().slice(0,7),modell_top10_r:+model.top.r.toFixed(3),modell_top10_treffer:+model.top.win.toFixed(3),
-      stunden_starker_kauf:n2,stunden_kauf:n1,stunden_top10:n9,coin_stunden:cnt});
-    console.log(`Rückwärtstest Signale ${diag.at(-1).monat}: Modell Top-10 % ${fmtR(model.top.r)}, Starker Kauf in ${n2} Coin-Stunden`);
+      for(const [mk,d] of Object.entries(hist)){const i=idx[mk].get(t);if(i==null||i<210||!d.A[i])continue;const x=feat(d,i);
+        model=mL;const cL=calib(predict(mL,x));model=mS;const cS=calib(predict(mS,x));
+        const e={q:cL.q,lvl:cL.r>=.25?2:cL.r>=.08?1:0,sq:cS.q,slvl:cS.r>=.25?2:cS.r>=.08?1:0,i,elig:vEur(d,i,24)>=MIN_VOL&&vEur(d,i,72)>=MIN_VOL3D,shortbar:shortable.has(mk)};
+        (sig[mk]||(sig[mk]=new Map())).set(t,e);if(e.lvl>=2)nL++;if(e.slvl>=2&&e.shortbar)nS++}}
+    diag.push({monat:new Date(mStart).toISOString().slice(0,7),kauf_modell_top10_r:+mL.top.r.toFixed(3),short_modell_top10_r:+mS.top.r.toFixed(3),stunden_starker_kauf:nL,stunden_starker_short:nS});
+    console.log(`Rückwärtstest ${diag.at(-1).monat}: Kauf-Modell ${fmtR(mL.top.r)}, Short-Modell ${fmtR(mS.top.r)}`);
   }
   const V={
-    'heute (Starker Kauf, nachziehender Stop, Verkaufssignal)':{entry:s=>s.lvl>=2,trail:true,sellSig:true},
-    'nach Plan (Starker Kauf, nur Stop/Ziel/Haltedauer)':{entry:s=>s.lvl>=2,trail:false,sellSig:false},
-    'Top 10 % immer (nur Stop/Ziel/Haltedauer)':{entry:s=>s.q===9,trail:false,sellSig:false},
-    'Top 10 % immer (nachziehender Stop, Verkaufssignal)':{entry:s=>s.q===9,trail:true,sellSig:true},
+    'nur Kauf, Starker Kauf (Regeln wie heute, ohne Nachzieh-Stop)':{long:s=>s.lvl>=2},
+    'nur Short, Starker Short':{short:s=>s.slvl>=2},
+    'Kauf und Short, je nur bei starkem Signal':{long:s=>s.lvl>=2,short:s=>s.slvl>=2},
+    'nur Short, immer die besten 10 %':{short:s=>s.sq===9},
+    'Kauf und Short, immer die besten 10 %':{long:s=>s.q===9,short:s=>s.sq===9},
   };
-  const out={erstellt:new Date().toISOString(),regeln:{betrag:100,kapital:1000,maxPos:PAPER.maxPos,geo:GEO,merkmale:FEATSET},diagnose:diag,varianten:{}};
-  for(const [name,v] of Object.entries(V))for(const limit of [false,true]){const key=`${name} · ${limit?'Limit':'Markt'}`;out.varianten[key]=simulate(hist,idx,sig,hours,months,now,{...v,limit,spread:true,hs})}
-  for(const name of ['nach Plan (Starker Kauf, nur Stop/Ziel/Haltedauer)','Top 10 % immer (nur Stop/Ziel/Haltedauer)'])out.varianten[`${name} · Markt ohne Spread`]=simulate(hist,idx,sig,hours,months,now,{...V[name],limit:false,spread:false,hs});
+  const out={erstellt:new Date().toISOString(),regeln:{betrag:100,hebel:1,kapital:1000,maxPos:PAPER.maxPos,geo:GEO,merkmale:FEATSET,leihzins_pa:+(BORROW_H*24*365*100).toFixed(1),short_coins:[...shortable]},diagnose:diag,varianten:{}};
+  for(const [name,v] of Object.entries(V))out.varianten[name]=simulate(hist,idx,sig,hours,months,now,{...v,hs});
   const B=hist['BTC-EUR'],btcAt=t=>{let i=B.ts.findIndex(x=>x>=t);if(i<0)i=B.ts.length-1;return B.c[i]};
   out.btc=months.map((m,i)=>({monat:new Date(m).toISOString().slice(0,7),pct:+((btcAt(i+1<months.length?months[i+1]:now)/btcAt(m)-1)*100).toFixed(2)}));
   out.dauer_s=Math.round((Date.now()-t0)/1e3);
-  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/rueckwaertstest.json',JSON.stringify(out,null,1));
-  try{fs.unlinkSync(LOG+'/analyse/rueckwaertstest_trades.csv')}catch(e){}
-  st.btV=BT_V;console.log(`Rückwärtstest fertig (${out.dauer_s} s)`);
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/rueckwaertstest_short.json',JSON.stringify(out,null,1));
+  st.btV=BT_V;console.log(`Rückwärtstest Short fertig (${out.dauer_s} s)`);
 }
 
 /* ---------- Hauptlauf ---------- */

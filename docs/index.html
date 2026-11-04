@@ -407,6 +407,14 @@ const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 function outcome(d,i){
   return outcomeG(d,i,GEO);
 }
+// Wette auf fallende Kurse (Short): Ziel unter dem Einstieg, Stop darüber; Gebühren und Leihzins (ca. 13 % p. a.) in R
+const BORROW_H=0.000015;
+function outcomeShort(d,i,g=GEO){
+  const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e-g.tp*R,sl=e+R,H=Math.max(2,Math.round(g.h/TFH[TF]));
+  const cost=k=>(2*FEE+BORROW_H*(k-i)*TFH[TF])*e/R;
+  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.h[k]>=sl)return{y:0,r:-1-cost(k)};if(d.l[k]<=tp)return{y:1,r:g.tp-cost(k)}}
+  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(e-d.c[k])/R-cost(k)};
+}
 function outcomeG(d,i,g){
   const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e+g.tp*R,sl=e-R,H=Math.max(2,Math.round(g.h/TFH[TF]));
   const fee=2*FEE*e/R; // Bitvavo-Gebühr für Kauf und Verkauf, in R
@@ -432,10 +440,10 @@ function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++){const v=x[k];if(v=
 function contrib(m,x){return x.map((v,k)=>v===v?m.w[k]*(v-m.mu[k])/m.sd[k]:0)}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
-async function trainModel(src=data,stride=1,minTs=0){
+async function trainModel(src=data,stride=1,minTs=0,maxTs=Infinity,outFn=outcome){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs||d.ts[i]>=maxTs)continue;const o=outFn(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
