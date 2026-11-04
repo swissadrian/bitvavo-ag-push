@@ -31,15 +31,17 @@ Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push. Stop und Ziel bere
 
 Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.enc`). Schlüssel ist dein ntfy-Kanal: Ohne ihn kann niemand die Datei lesen. Änderst du den Kanal, beginnt der Bot mit leerem Bestand.
 
-## Lernen aus 12 Monaten
+## Lernen aus 12 oder 24 Monaten
 
-Einmal täglich lädt der Bot die Stundenkerzen der letzten 12 Monate aller Coins der Beobachtungsliste. Beim ersten Mal sind das etwa 7 Abfragen pro Coin, danach nur noch das Neue. Daraus trainiert er das Modell und veröffentlicht es in `analyse/modell.json`. Die 5-Minuten-Läufe und die Radar-App (bei 1h) verwenden dieses Modell. Geprüft wird auf den jüngsten 25 % der Daten, die das Modell nicht kannte (rund 3 Monate).
+Einmal täglich lädt der Bot die Stundenkerzen der letzten 24 Monate aller Coins der Beobachtungsliste. Beim ersten Mal sind das etwa 14 Abfragen pro Coin, danach nur noch das Neue. Daraus trainiert er das Modell und veröffentlicht es in `analyse/modell.json`. Die 5-Minuten-Läufe und die Radar-App (bei 1h) verwenden dieses Modell.
 
-Damit kennt das Modell steigende, fallende und seitwärts laufende Marktphasen, nicht nur die letzten Wochen. Der Bot hält dabei Abstand zu Bitvavos Limit von 1000 Abfragen pro Minute und bremst automatisch, wenn es knapp wird.
+Einmal pro Woche vergleicht der Bot, ob 12 oder 24 Monate Lerndaten bessere Vorhersagen liefern. Beide Varianten werden auf denselben jüngsten 3 Monaten getestet, die keine von beiden kannte. 24 Monate werden nur genutzt, wenn sie spürbar besser abschneiden (Ergebnisse in `analyse/lernfenster.csv`). Mehr Geschichte heisst nicht automatisch bessere Vorhersagen, weil sich Märkte verändern.
+
+Der Bot hält dabei Abstand zu Bitvavos Limit von 1000 Abfragen pro Minute und bremst automatisch, wenn es knapp wird.
 
 ## Trade-Aufbau: automatisch nach Gebühren optimiert
 
-Einmal pro Woche testet der Bot 108 Varianten auf den 12 Monaten Kursverlauf aller Märkte: Stop-Abstand (1–3 ATR, mindestens 0 / 1,5 / 2,5 % vom Kurs), Ziel (1,5 / 2 / 3 × Risiko) und Haltedauer (8 / 24 / 48 h). Bewertet wird jeweils der unbekannte Testzeitraum nach Abzug von 0,25 % Gebühr pro Kauf und Verkauf. Der beste Aufbau gilt ab dann für Bot und Radar-App. Ergebnisse stehen im Branch `logs` unter `analyse/`.
+Einmal pro Woche testet der Bot 108 Varianten auf dem gewählten Lernzeitraum (12 oder 24 Monate) aller Märkte: Stop-Abstand (1–3 ATR, mindestens 0 / 1,5 / 2,5 % vom Kurs), Ziel (1,5 / 2 / 3 × Risiko) und Haltedauer (8 / 24 / 48 h). Bewertet wird jeweils der unbekannte Testzeitraum nach Abzug von 0,25 % Gebühr pro Kauf und Verkauf. Der beste Aufbau gilt ab dann für Bot und Radar-App. Ergebnisse stehen im Branch `logs` unter `analyse/`.
 
 Zu enge Stops verlieren schon durch die Gebühren. Ein Stop von 1 ATR auf dem 1h-Chart liegt oft nur etwa 0,5 % entfernt, so viel kosten auch Kauf und Verkauf zusammen. Stablecoins wie USDC oder EURC werden nicht analysiert.
 
@@ -55,7 +57,7 @@ Das Modell lernt aus 16 Basis-Merkmalen: EMA-Trend, RSI, MACD, Bollinger, Volume
 - **Tageszeit:** Europa-, US- und späte Session.
 - **Kombinationen:** Rücksetzer im Aufwärtstrend, Ausbruch mit Volumen, Coin und Bitcoin beide im Aufwärtstrend.
 
-Einmal pro Woche vergleicht der Bot beide Varianten auf denselben unbekannten Testdaten aus 12 Monaten Verlauf, nach Gebühren. Die erweiterte Variante wird nur genutzt, wenn sie spürbar besser abschneidet (Ergebnisse in `analyse/merkmale.csv`). Die Radar-App übernimmt die Wahl automatisch.
+Einmal pro Woche vergleicht der Bot beide Varianten auf denselben unbekannten Testdaten aus dem gewählten Lernzeitraum, nach Gebühren. Die erweiterte Variante wird nur genutzt, wenn sie spürbar besser abschneidet (Ergebnisse in `analyse/merkmale.csv`). Die Radar-App übernimmt die Wahl automatisch.
 
 ## Logbuch
 

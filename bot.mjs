@@ -121,10 +121,10 @@ function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.m
 function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
-async function trainModel(src=data,stride=1){
+async function trainModel(src=data,stride=1,minTs=0){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -355,8 +355,10 @@ function housekeeping(){
   if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Stunden gepackt, ${thinned} Tage verdichtet, ${deleted} gelöscht.`);
 }
 
-/* ---------- Langzeitverlauf: 12 Monate Kerzen je Markt, zwischengespeichert im Runner ---------- */
-const HIST_DAYS=+(process.env.HIST_DAYS||365), CACHE=process.env.CACHE_DIR||'verlauf', LONG_V=1;
+/* ---------- Langzeitverlauf: bis 24 Monate Kerzen je Markt, zwischengespeichert im Runner ---------- */
+// Geladen werden 24 Monate; trainiert wird auf 12 oder 24 Monaten, je nach wöchentlichem Vergleich (st.histDays)
+const HIST_MAX=+(process.env.HIST_MAX||730), CACHE=process.env.CACHE_DIR||'verlauf', LONG_V=1;
+const winDays=()=>Math.min(HIST_MAX,st.histDays||365);
 // Lädt [start,end] in Fenstern zu höchstens 1440 Kerzen (unabhängig von der Sortierung der Antwort)
 async function fetchRange(mk,start,end,map){
   const step=TFH[TF]*36e5,W=1440*step;let n=0;
@@ -365,47 +367,80 @@ async function fetchRange(mk,start,end,map){
     if(Array.isArray(rows))for(const r of rows){const t=+r[0];if(t>=start&&t<=end){map.set(t,[t,+r[1],+r[2],+r[3],+r[4],+r[5]]);n++}}}
   return n;
 }
-async function history(mk){
-  const now=Date.now(),from=now-HIST_DAYS*DAY_MS,f=`${CACHE}/${TF}/${mk}.json.gz`;
-  let c={full:false,rows:[]};try{c=JSON.parse(zlib.gunzipSync(fs.readFileSync(f)).toString('utf8'))}catch(e){}
+async function history(mk,days=HIST_MAX){
+  const now=Date.now(),from=now-days*DAY_MS,f=`${CACHE}/${TF}/${mk}.json.gz`;
+  let c={full:false,days:0,rows:[]};try{c=JSON.parse(zlib.gunzipSync(fs.readFileSync(f)).toString('utf8'))}catch(e){}
+  if(c.full&&!c.days)c.days=365;                                           // Zwischenspeicher der Vorversion
   const map=new Map();for(const r of c.rows)if(r[0]>=from)map.set(r[0],r);
-  if(!c.full||!map.size)await fetchRange(mk,from,now,map);                 // erstmals: ganzes Jahr
-  else await fetchRange(mk,Math.max(...map.keys()),now,map);               // danach: nur Neues
+  if(!c.full||!map.size)await fetchRange(mk,from,now,map);                 // erstmals: ganzer Zeitraum
+  else{let lo=Infinity,hi=0;for(const t of map.keys()){if(t<lo)lo=t;if(t>hi)hi=t}
+    if(c.days<days)await fetchRange(mk,from,lo-1,map);                     // Zeitraum verlängert: Älteres ergänzen
+    await fetchRange(mk,hi,now,map)}                                       // danach: nur Neues
   const rows=[...map.values()].sort((a,b)=>a[0]-b[0]);
-  fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,zlib.gzipSync(JSON.stringify({full:true,rows})));
+  fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,zlib.gzipSync(JSON.stringify({full:true,days,rows})));
   return rows;
 }
 function packModel(m){
   const q=m.allP,N=Math.min(1000,q.length),allP=Array.from({length:N},(_,i)=>+q[Math.round(i*(q.length-1)/Math.max(1,N-1))].toFixed(6));
   return{w:m.w,b:m.b,mu:m.mu,sd:m.sd,base:m.base,buckets:m.buckets,allP,baseWin:m.baseWin,baseR:m.baseR,coin:m.coin,n:m.n,ntest:m.ntest,
-    from:new Date(m.from).toISOString(),to:new Date(m.to).toISOString(),tf:m.tf,trained:m.trained,top:m.top,top2:m.top2,merkmale:FEATSET,tage:HIST_DAYS};
+    from:new Date(m.from).toISOString(),to:new Date(m.to).toISOString(),tf:m.tf,trained:m.trained,top:m.top,top2:m.top2,merkmale:FEATSET,tage:winDays()};
 }
-// Einmal täglich: 12 Monate laden, wöchentliche Analysen, Modell trainieren und veröffentlichen
+// Einmal täglich: 24 Monate laden, wöchentliche Analysen, Modell trainieren und veröffentlichen
 async function longTrain(){
   const t0=Date.now(),c0=bvCount;st.longTryAt=t0;
   const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
   const hist={};let bars=0;
   await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300){hist[mk]=prep(rows);bars+=rows.length}});
   const mk=Object.keys(hist).length;
-  console.log(`Langzeitverlauf: ${mk} Märkte, ${bars.toLocaleString('de-CH')} Kerzen (${HIST_DAYS} Tage), ${bvCount-c0} Abfragen, ${((Date.now()-t0)/1e3).toFixed(0)} s.`);
+  console.log(`Langzeitverlauf: ${mk} Märkte, ${bars.toLocaleString('de-CH')} Kerzen (bis ${HIST_MAX} Tage), ${bvCount-c0} Abfragen, ${((Date.now()-t0)/1e3).toFixed(0)} s.`);
   if(!hist['BTC-EUR']||mk<10)throw new Error('Langzeitverlauf unvollständig');
   setBtc(hist);
-  if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis(hist);
-  if(!st.featAt||Date.now()-st.featAt>7*DAY_MS)await featureAB(hist);
+  if(!st.winAt||Date.now()-st.winAt>7*DAY_MS)await windowAB(hist);
+  const minTs=Date.now()-winDays()*DAY_MS;let inWin=0;for(const d of Object.values(hist))for(const t of d.ts)if(t>=minTs)inWin++;
+  if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis(hist,minTs);
+  if(!st.featAt||Date.now()-st.featAt>7*DAY_MS)await featureAB(hist,minTs);
   setFeatSet(st.featSet||'v1');
   const t1=Date.now();
-  await trainModel(hist,Math.max(1,Math.round(bars/450000)));
+  await trainModel(hist,Math.max(1,Math.round(inWin/450000)),minTs);
   st.model=packModel(model);st.modelAt=Date.now();
   fs.mkdirSync(LOG+'/analyse',{recursive:true});
   fs.writeFileSync(LOG+'/analyse/modell.json',JSON.stringify({...st.model,merkmal_namen:ACTIVE.map(F=>F.n),gebuehr_pro_seite:FEE}));
-  console.log(`Langzeitmodell: ${model.n.toLocaleString('de-CH')} Signale, ${model.from.toISOString().slice(0,10)} bis ${model.to.toISOString().slice(0,10)}, Basis ${(model.baseWin*100).toFixed(0)} %, Top-10 % ${(model.top.win*100).toFixed(0)} % / ${fmtR(model.top.r)} (${((Date.now()-t1)/1e3).toFixed(0)} s)`);
+  console.log(`Langzeitmodell (${winDays()} Tage): ${model.n.toLocaleString('de-CH')} Signale, ${model.from.toISOString().slice(0,10)} bis ${model.to.toISOString().slice(0,10)}, Basis ${(model.baseWin*100).toFixed(0)} %, Top-10 % ${(model.top.win*100).toFixed(0)} % / ${fmtR(model.top.r)} (${((Date.now()-t1)/1e3).toFixed(0)} s)`);
   setBtc();
 }
 
+/* ---------- 12 gegen 24 Monate Lerndaten: wöchentlicher Vergleich auf denselben 3 Testmonaten ---------- */
+async function windowAB(src){
+  const t0=Date.now(),now=t0,testFrom=now-91*DAY_MS,hb=horBars(),gap=hb*TFH[TF]*36e5,D=Object.values(src);
+  const stride=Math.max(1,Math.round(D.reduce((s,d)=>s+d.c.length,0)/500000)),S=[];let oldest=Infinity;
+  for(const d of D)for(let i=210;i<d.c.length-hb;i+=stride)if(d.A[i]){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r});if(d.ts[i]<oldest)oldest=d.ts[i]}
+  const test=S.filter(s=>s.ts>=testFrom);if(test.length<2000)return console.log('Zu wenig Daten für den Lernfenster-Vergleich.');
+  const res={};
+  for(const W of [365,730]){
+    // Trainiert wird nur auf Daten vor dem Testzeitraum (mit Abstand, damit kein Ergebnis in den Test hineinreicht)
+    const tr=S.filter(s=>s.ts<testFrom-gap&&s.ts>=now-W*DAY_MS),n=tr.length;if(n<2000){res[W]=null;continue}
+    const X=new Float64Array(n*K),Y=new Float64Array(n);tr.forEach((s,i)=>{for(let k=0;k<K;k++)X[i*K+k]=s.x[k];Y[i]=s.y});
+    const m=fit(X,Y,n,120),t=test.map(s=>[predict(m,s.x),s.r,s.y]).sort((a,b)=>b[0]-a[0]);
+    const top=f=>{const q=t.slice(0,Math.max(1,Math.floor(t.length*f)));return{r:q.reduce((s,x)=>s+x[1],0)/q.length,w:q.reduce((s,x)=>s+x[2],0)/q.length}};
+    const a=top(.1),b=top(.2);res[W]={n,top10_r:a.r,top10_win:a.w,top20_r:b.r,score:(a.r+b.r)/2};
+  }
+  const win=res[730]&&res[365]&&res[730].score>res[365].score+0.01?730:365;st.histDays=win;st.winAt=now;
+  const days=Math.round((testFrom-oldest)/DAY_MS),d=iso(now);
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});
+  const f=LOG+'/analyse/lernfenster.csv',head='datum_utc,lerndaten_monate,trainings_beispiele,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,gewaehlt';
+  const old=fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').slice(1):[];
+  const line=W=>{const x=res[W];return x?[d,W/365*12,x.n,x.top10_r.toFixed(3),x.top10_win.toFixed(3),x.top20_r.toFixed(3),win===W?'ja':'nein'].join(','):[d,W/365*12,0,'','','','nein'].join(',')};
+  fs.writeFileSync(f,[head,...old,line(365),line(730)].join('\n')+'\n');
+  const af=LOG+'/analyse/aktuell.json';let ak={};try{ak=JSON.parse(fs.readFileSync(af,'utf8'))}catch(e){}
+  fs.writeFileSync(af,JSON.stringify({...ak,lernfenster_monate:win/365*12,lernfenster_vergleich:{m12:res[365]&&+res[365].score.toFixed(3),m24:res[730]&&+res[730].score.toFixed(3),test_monate:3,verfuegbare_tage_vor_test:days,gemessen:new Date(now).toISOString()}},null,1));
+  console.log(`Lernfenster-Vergleich (${((Date.now()-t0)/1e3).toFixed(0)} s, Test ${test.length} Beispiele): 12 Monate ${res[365]?fmtR(res[365].score):'–'}, 24 Monate ${res[730]?fmtR(res[730].score):'–'} → ${win/365*12} Monate`);
+}
+
 /* ---------- Welcher Trade-Aufbau lohnt sich nach Gebühren? (einmal pro Woche) ---------- */
-async function geoAnalysis(src=data){
-  const t0=Date.now(),S=[],tail=Math.round(48/TFH[TF]),D=Object.values(src),stride=Math.max(1,Math.round(D.reduce((s,d)=>s+d.c.length,0)/150000));
-  for(const d of D)for(let i=210;i<d.c.length-tail;i+=stride)if(d.A[i])S.push({d,i,ts:d.ts[i],x:feat(d,i)});
+async function geoAnalysis(src=data,minTs=0){
+  const t0=Date.now(),S=[],tail=Math.round(48/TFH[TF]),D=Object.values(src);let cnt=0;for(const d of D)for(const t of d.ts)if(t>=minTs)cnt++;
+  const stride=Math.max(1,Math.round(cnt/150000));
+  for(const d of D)for(let i=210;i<d.c.length-tail;i+=stride)if(d.A[i]&&d.ts[i]>=minTs)S.push({d,i,ts:d.ts[i],x:feat(d,i)});
   if(S.length<2000)return console.log('Zu wenig Daten für die Aufbau-Analyse.');
   S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75),X=new Float64Array(n*K);
   S.forEach((s,i)=>{for(let k=0;k<K;k++)X[i*K+k]=s.x[k]});
@@ -463,10 +498,11 @@ function retro(){
 }
 
 /* ---------- Bisherige gegen erweiterte Merkmale: wöchentlicher Vergleich auf unbekannten Testdaten ---------- */
-async function featureAB(src=data){
+async function featureAB(src=data,minTs=0){
   const t0=Date.now();setFeatSet('v2');
-  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars(),D=Object.values(src),stride=Math.max(1,Math.round(D.reduce((s,d)=>s+d.c.length,0)/400000));
-  for(const d of D)for(let i=210;i<d.c.length-hb;i+=stride)if(d.A[i]){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
+  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars(),D=Object.values(src);let cnt=0;for(const d of D)for(const t of d.ts)if(t>=minTs)cnt++;
+  const stride=Math.max(1,Math.round(cnt/400000));
+  for(const d of D)for(let i=210;i<d.c.length-hb;i+=stride)if(d.A[i]&&d.ts[i]>=minTs){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
   if(S.length<2000){setFeatSet(st.featSet||'v1');return console.log('Zu wenig Daten für den Merkmal-Vergleich.')}
   S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75);
   const score=cols=>{const k=cols.length,X=new Float64Array(n*k),Y=new Float64Array(n);
@@ -504,7 +540,7 @@ async function main(){
   if(st.longV!==LONG_V){st.longV=LONG_V;st.geoAt=0;st.featAt=0;st.model=null;if(st.edge===undefined&&st.geo)st.edge=false}
   if(st.geo)GEO={...GEO,...st.geo};
   setFeatSet(st.featSet||'v1');
-  const due=!st.model||st.model.tf!==TF||st.model.merkmale!==(st.featSet||'v1')||Date.now()-(st.modelAt||0)>DAY_MS;
+  const due=!st.winAt||!st.model||st.model.tf!==TF||st.model.merkmale!==(st.featSet||'v1')||Date.now()-(st.modelAt||0)>DAY_MS;
   if(due&&Date.now()-(st.longTryAt||0)>36e5){try{await longTrain()}catch(e){console.warn('Langzeit-Training fehlgeschlagen, nächster Versuch in 1 h:',e.message)}}
   if(st.geo)GEO={...GEO,...st.geo};
   setFeatSet(st.featSet||'v1');setBtc();

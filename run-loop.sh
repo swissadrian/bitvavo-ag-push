@@ -19,7 +19,7 @@ main(){
     T0=$(date +%s); n=$((n+1))
     echo "::group::Lauf $n – $(date -u '+%H:%M') UTC"
     git fetch -q origin main && git reset -q --hard origin/main    # immer die neueste Bot-Version
-    node bot.mjs || echo "Bot mit Fehler beendet (Meldung per ntfy)"
+    node --max-old-space-size=6144 bot.mjs || echo "Bot mit Fehler beendet (Meldung per ntfy)"
     save_log "$n"
     echo "::endgroup::"
     NEXT=$(( T0 + INTERVAL )); NOW=$(date +%s)

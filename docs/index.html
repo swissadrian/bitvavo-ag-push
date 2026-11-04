@@ -242,7 +242,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <div class="learn">
     <section class="panel" aria-label="Lernmodell">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Lernmodell</h2><span class="muted" id="mTime">noch nicht trainiert</span></div>
-      <p class="muted" style="margin:0;max-width:65ch">Der GitHub-Bot trainiert das Modell täglich auf den Stundenkerzen der letzten 12 Monate aller Coins der Beobachtungsliste. Für jede Kerze prüft er: Hätte ein Kauf nach Abzug der Bitvavo-Gebühren das Ziel vor dem Stop erreicht? Stop-Abstand, Ziel und Haltedauer bestimmt der GitHub-Bot jede Woche neu anhand echter Daten. Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten (rund 3 Monate), die das Modell beim Test nicht kannte. Bei 15m und 4h lernt die App selbst aus den letzten Wochen.</p>
+      <p class="muted" style="margin:0;max-width:65ch">Der GitHub-Bot trainiert das Modell täglich auf den Stundenkerzen der letzten 12 oder 24 Monate aller Coins der Beobachtungsliste, je nachdem, was im wöchentlichen Vergleich besser abschneidet. Für jede Kerze prüft er: Hätte ein Kauf nach Abzug der Bitvavo-Gebühren das Ziel vor dem Stop erreicht? Stop-Abstand, Ziel und Haltedauer bestimmt der GitHub-Bot jede Woche neu anhand echter Daten. Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten (rund 3 Monate), die das Modell beim Test nicht kannte. Bei 15m und 4h lernt die App selbst aus den letzten Wochen.</p>
       <div class="stats" id="mStats"></div>
       <div><span class="lbl">Gelernte Gewichte · rechts = spricht für Kauf, links = dagegen</span><div class="wts" id="mW" style="margin-top:8px"></div></div>
     </section>
@@ -386,10 +386,10 @@ function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.m
 function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
-async function trainModel(src=data,stride=1){
+async function trainModel(src=data,stride=1,minTs=0){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -695,7 +695,7 @@ function renderMood(){
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
-  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${FEATSET==='v2'?'erweiterte Merkmale':'Basis-Merkmale'} (${K}) · ${m.bot?'vom Bot, 12 Monate':'in der App gelernt'} · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
+  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${FEATSET==='v2'?'erweiterte Merkmale':'Basis-Merkmale'} (${K}) · ${m.bot?'vom Bot, '+Math.round((m.tage||365)/30.4)+' Monate':'in der App gelernt'} · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
   const lift=m.top.win/m.baseWin;
   $('#mStats').innerHTML=`<div><span class="lbl">Gelernte Signale</span><b>${m.n.toLocaleString('de-CH')}</b></div>
    <div><span class="lbl">Trefferquote zufällig</span><b>${(m.baseWin*100).toFixed(0)}%</b></div>
