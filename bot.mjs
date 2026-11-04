@@ -41,7 +41,7 @@ function adx(h,l,c,n=14){const N=c.length,P=Array(N).fill(0),M=Array(N).fill(0),
 function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.length;i++){while(q.length&&q[0]<i-w)q.shift();o[i]=q.length?h[q[0]]:null;while(q.length&&h[q[q.length-1]]<=h[i])q.pop();q.push(i)}return o}
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
-function setBtc(){BTCX=new Map();const d=data['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
+function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
 function prep(cand){
   const ts=cand.map(x=>+x[0]),o=cand.map(x=>+x[1]),h=cand.map(x=>+x[2]),l=cand.map(x=>+x[3]),c=cand.map(x=>+x[4]),v=cand.map(x=>+x[5]);
   const e12=ema(c,12),e26=ema(c,26),mm=c.map((_,i)=>e12[i]-e26[i]),ms=ema(mm,9),mh=mm.map((x,i)=>x-ms[i]);
@@ -120,10 +120,11 @@ function fit(X,y,n,iters=160,K=ACTIVE.length){
 function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
 function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
-async function trainModel(){
+// src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
+async function trainModel(src=data,stride=1){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(data)){const d=data[mk];for(let i=210;i<d.c.length-H;i++){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -188,7 +189,20 @@ function saveState(){
   fs.writeFileSync(STATE_FILE,Buffer.concat([iv,c.getAuthTag(),ct]).toString('base64'));
 }
 
-async function j(url,tries=3){for(let t=0;t<tries;t++){try{const r=await fetch(url);if(r.ok)return r.json();if(r.status<500&&r.status!==429)throw new Error(url.split('?')[0]+' → '+r.status)}catch(e){if(t===tries-1)throw e}await new Promise(r=>setTimeout(r,1500*(t+1)))}throw new Error(url+' nicht erreichbar')}
+// Bitvavo erlaubt 1000 Abfragen pro Minute; der Bot hält Abstand und bremst, wenn das Limit naht
+const BV_GAP=+(process.env.BV_GAP_MS||110), sleep=ms=>new Promise(r=>setTimeout(r,ms));let bvNext=0,bvCount=0;
+async function j(url,tries=4){
+  for(let t=0;t<tries;t++){
+    if(url.startsWith(API)){const now=Date.now(),at=Math.max(now,bvNext);bvNext=at+BV_GAP;bvCount++;if(at>now)await sleep(at-now)}
+    try{const r=await fetch(url);
+      const rem=+(r.headers?.get?.('bitvavo-ratelimit-remaining')??NaN),reset=+(r.headers?.get?.('bitvavo-ratelimit-resetat')??NaN);
+      if(Number.isFinite(rem)&&rem<150){const w=Math.min(65e3,Math.max(1e3,(Number.isFinite(reset)?reset-Date.now():30e3)+500));console.log(`Bitvavo-Limit fast erreicht (${rem} übrig), pausiere ${(w/1e3).toFixed(0)} s`);bvNext=Math.max(bvNext,Date.now()+w)}
+      if(r.ok)return r.json();
+      if(r.status===429){bvNext=Math.max(bvNext,Date.now()+20e3);continue}
+      if(r.status<500){const e=new Error(url.split('?')[0]+' → '+r.status);e.fatal=true;throw e}}
+    catch(e){if(e.fatal||t===tries-1)throw e}
+    await sleep(1500*(t+1))}
+  throw new Error(url.split('?')[0]+' nicht erreichbar')}
 async function pool(items,n,fn){let i=0;await Promise.all(Array.from({length:n},async()=>{while(i<items.length){const it=items[i++];try{await fn(it)}catch(e){console.warn(it.market,e.message)}}}))}
 async function push(title,message,prio=4,tag='chart_with_upwards_trend'){
   console.log('PUSH',title,'|',message);
@@ -319,10 +333,57 @@ function housekeeping(){
   if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Stunden gepackt, ${thinned} Tage verdichtet, ${deleted} gelöscht.`);
 }
 
+/* ---------- Langzeitverlauf: 12 Monate Kerzen je Markt, zwischengespeichert im Runner ---------- */
+const HIST_DAYS=+(process.env.HIST_DAYS||365), CACHE=process.env.CACHE_DIR||'verlauf', LONG_V=1;
+// Lädt [start,end] in Fenstern zu höchstens 1440 Kerzen (unabhängig von der Sortierung der Antwort)
+async function fetchRange(mk,start,end,map){
+  const step=TFH[TF]*36e5,W=1440*step;let n=0;
+  for(let s=Math.floor(start);s<end;s+=W){const e=Math.min(Math.floor(end),s+W-1);
+    const rows=await j(`${API}/${mk}/candles?interval=${TF}&limit=1440&start=${s}&end=${e}`);
+    if(Array.isArray(rows))for(const r of rows){const t=+r[0];if(t>=start&&t<=end){map.set(t,[t,+r[1],+r[2],+r[3],+r[4],+r[5]]);n++}}}
+  return n;
+}
+async function history(mk){
+  const now=Date.now(),from=now-HIST_DAYS*DAY_MS,f=`${CACHE}/${TF}/${mk}.json.gz`;
+  let c={full:false,rows:[]};try{c=JSON.parse(zlib.gunzipSync(fs.readFileSync(f)).toString('utf8'))}catch(e){}
+  const map=new Map();for(const r of c.rows)if(r[0]>=from)map.set(r[0],r);
+  if(!c.full||!map.size)await fetchRange(mk,from,now,map);                 // erstmals: ganzes Jahr
+  else await fetchRange(mk,Math.max(...map.keys()),now,map);               // danach: nur Neues
+  const rows=[...map.values()].sort((a,b)=>a[0]-b[0]);
+  fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,zlib.gzipSync(JSON.stringify({full:true,rows})));
+  return rows;
+}
+function packModel(m){
+  const q=m.allP,N=Math.min(1000,q.length),allP=Array.from({length:N},(_,i)=>+q[Math.round(i*(q.length-1)/Math.max(1,N-1))].toFixed(6));
+  return{w:m.w,b:m.b,mu:m.mu,sd:m.sd,base:m.base,buckets:m.buckets,allP,baseWin:m.baseWin,baseR:m.baseR,coin:m.coin,n:m.n,ntest:m.ntest,
+    from:new Date(m.from).toISOString(),to:new Date(m.to).toISOString(),tf:m.tf,trained:m.trained,top:m.top,top2:m.top2,merkmale:FEATSET,tage:HIST_DAYS};
+}
+// Einmal täglich: 12 Monate laden, wöchentliche Analysen, Modell trainieren und veröffentlichen
+async function longTrain(){
+  const t0=Date.now(),c0=bvCount;st.longTryAt=t0;
+  const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
+  const hist={};let bars=0;
+  await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300){hist[mk]=prep(rows);bars+=rows.length}});
+  const mk=Object.keys(hist).length;
+  console.log(`Langzeitverlauf: ${mk} Märkte, ${bars.toLocaleString('de-CH')} Kerzen (${HIST_DAYS} Tage), ${bvCount-c0} Abfragen, ${((Date.now()-t0)/1e3).toFixed(0)} s.`);
+  if(!hist['BTC-EUR']||mk<10)throw new Error('Langzeitverlauf unvollständig');
+  setBtc(hist);
+  if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis(hist);
+  if(!st.featAt||Date.now()-st.featAt>7*DAY_MS)await featureAB(hist);
+  setFeatSet(st.featSet||'v1');
+  const t1=Date.now();
+  await trainModel(hist,Math.max(1,Math.round(bars/450000)));
+  st.model=packModel(model);st.modelAt=Date.now();
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});
+  fs.writeFileSync(LOG+'/analyse/modell.json',JSON.stringify({...st.model,merkmal_namen:ACTIVE.map(F=>F.n),gebuehr_pro_seite:FEE}));
+  console.log(`Langzeitmodell: ${model.n.toLocaleString('de-CH')} Signale, ${model.from.toISOString().slice(0,10)} bis ${model.to.toISOString().slice(0,10)}, Basis ${(model.baseWin*100).toFixed(0)} %, Top-10 % ${(model.top.win*100).toFixed(0)} % / ${fmtR(model.top.r)} (${((Date.now()-t1)/1e3).toFixed(0)} s)`);
+  setBtc();
+}
+
 /* ---------- Welcher Trade-Aufbau lohnt sich nach Gebühren? (einmal pro Woche) ---------- */
-async function geoAnalysis(){
-  const t0=Date.now(),S=[],tail=Math.round(48/TFH[TF]);
-  for(const d of Object.values(data))for(let i=210;i<d.c.length-tail;i++)if(d.A[i])S.push({d,i,ts:d.ts[i],x:feat(d,i)});
+async function geoAnalysis(src=data){
+  const t0=Date.now(),S=[],tail=Math.round(48/TFH[TF]),D=Object.values(src),stride=Math.max(1,Math.round(D.reduce((s,d)=>s+d.c.length,0)/150000));
+  for(const d of D)for(let i=210;i<d.c.length-tail;i+=stride)if(d.A[i])S.push({d,i,ts:d.ts[i],x:feat(d,i)});
   if(S.length<2000)return console.log('Zu wenig Daten für die Aufbau-Analyse.');
   S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75),X=new Float64Array(n*K);
   S.forEach((s,i)=>{for(let k=0;k<K;k++)X[i*K+k]=s.x[k]});
@@ -342,10 +403,16 @@ async function geoAnalysis(){
   fs.mkdirSync(LOG+'/analyse',{recursive:true});
   fs.writeFileSync(LOG+'/analyse/geometrie.csv',['stop_atr,min_risiko_pct,ziel_r,haltedauer_h,erwartung_alle_r,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,anzahl_top10',
     ...res.map(r=>[r.sl,r.minRisk*100,r.tp,r.h,r.base_r.toFixed(3),r.top10_r.toFixed(3),r.top10_win.toFixed(3),r.top20_r.toFixed(3),r.top10_n].join(','))].join('\n')+'\n');
-  fs.writeFileSync(LOG+'/analyse/aktuell.json',JSON.stringify({merkmale:st.featSet||'v1',geo:st.geo,gemessen:new Date().toISOString(),zeiteinheit:TF,tage_daten:days,beispiele:n,
+  const af=LOG+'/analyse/aktuell.json';let ak={};try{ak=JSON.parse(fs.readFileSync(af,'utf8'))}catch(e){}
+  fs.writeFileSync(af,JSON.stringify({...ak,merkmale:st.featSet||'v1',geo:st.geo,gemessen:new Date().toISOString(),zeiteinheit:TF,tage_daten:days,beispiele:n,
     erwartung_top10_r:+best.top10_r.toFixed(3),trefferquote_top10:+best.top10_win.toFixed(3),gebuehr_pro_seite:FEE},null,1));
   console.log(`Aufbau-Analyse (${res.length} Varianten, ${((Date.now()-t0)/1000).toFixed(0)} s): bester Aufbau Stop ${best.sl} ATR / min ${best.minRisk*100}%, Ziel ${best.tp} R, ${best.h} h → Top-10 % ${fmtR(best.top10_r)}`);
-  if(best.top10_r<=0)await push('Kein Vorteil nach Gebühren','Auch der beste getestete Trade-Aufbau verliert nach Gebühren im Schnitt. Bis sich das ändert, kommen kaum Kauf-Signale.',3,'warning');
+  // Nur bei einem Wechsel melden: Vorteil verloren oder wiedergewonnen
+  const edge=best.top10_r>0;
+  if(edge!==st.edge){
+    if(!edge)await push('Kein Vorteil nach Gebühren','Auch der beste getestete Trade-Aufbau verliert nach Gebühren im Schnitt. Bis sich das ändert, kommen kaum Kauf-Signale.',3,'warning');
+    else if(st.edge===false)await push('Wieder ein Vorteil nach Gebühren',`Die besten 10 % der Signale brachten zuletzt im Schnitt ${fmtR(best.top10_r)} pro Trade nach Gebühren. Kauf-Signale sind wieder möglich.`,3,'chart_with_upwards_trend');
+    st.edge=edge}
 }
 
 /* ---------- Rückblick: Hätte das Modell die Gewinner der letzten 24h erkannt? (stündlich) ---------- */
@@ -374,10 +441,10 @@ function retro(){
 }
 
 /* ---------- Bisherige gegen erweiterte Merkmale: wöchentlicher Vergleich auf unbekannten Testdaten ---------- */
-async function featureAB(){
+async function featureAB(src=data){
   const t0=Date.now();setFeatSet('v2');
-  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars();
-  for(const d of Object.values(data))for(let i=210;i<d.c.length-hb;i++)if(d.A[i]){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
+  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars(),D=Object.values(src),stride=Math.max(1,Math.round(D.reduce((s,d)=>s+d.c.length,0)/400000));
+  for(const d of D)for(let i=210;i<d.c.length-hb;i+=stride)if(d.A[i]){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
   if(S.length<2000){setFeatSet(st.featSet||'v1');return console.log('Zu wenig Daten für den Merkmal-Vergleich.')}
   S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75);
   const score=cols=>{const k=cols.length,X=new Float64Array(n*k),Y=new Float64Array(n);
@@ -410,13 +477,17 @@ async function main(){
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
   console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
+  // Umstellung auf 12 Monate: Analysen und Modell einmalig neu berechnen (die bekannte Warnung nicht erneut senden)
+  if(st.longV!==LONG_V){st.longV=LONG_V;st.geoAt=0;st.featAt=0;st.model=null;if(st.edge===undefined&&st.geo)st.edge=false}
+  if(st.geo)GEO={...GEO,...st.geo};
+  setFeatSet(st.featSet||'v1');
+  const due=!st.model||st.model.tf!==TF||st.model.merkmale!==(st.featSet||'v1')||Date.now()-(st.modelAt||0)>DAY_MS;
+  if(due&&Date.now()-(st.longTryAt||0)>36e5){try{await longTrain()}catch(e){console.warn('Langzeit-Training fehlgeschlagen, nächster Versuch in 1 h:',e.message)}}
   if(st.geo)GEO={...GEO,...st.geo};
   setFeatSet(st.featSet||'v1');setBtc();
-  if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis();
-  if(!st.featAt||Date.now()-st.featAt>7*DAY_MS)await featureAB();
-  setFeatSet(st.featSet||'v1');
-  await trainModel();
-  console.log(`Modell: ${model.n} Signale, Basis ${(model.baseWin*100).toFixed(0)}%, Top-10% ${(model.top.win*100).toFixed(0)}%`);
+  if(st.model&&st.model.tf===TF&&st.model.merkmale===FEATSET&&st.model.w.length===K)model=st.model;
+  else{console.log('Kein Langzeitmodell vorhanden, lerne vorerst aus den letzten Wochen.');await trainModel()}
+  console.log(`Modell: ${model.n} Signale (${model.tage?model.tage+' Tage':'letzte Wochen'}), Basis ${(model.baseWin*100).toFixed(0)}%, Top-10% ${(model.top.win*100).toFixed(0)}%`);
   markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
 
   const now=Date.now(),buys=[],sells=[];

@@ -242,7 +242,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <div class="learn">
     <section class="panel" aria-label="Lernmodell">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Lernmodell</h2><span class="muted" id="mTime">noch nicht trainiert</span></div>
-      <p class="muted" style="margin:0;max-width:65ch">Das Modell testet jede Kerze der letzten Wochen auf allen gefilterten Märkten: Hätte ein Kauf nach Abzug der Bitvavo-Gebühren das Ziel vor dem Stop erreicht? Stop-Abstand, Ziel und Haltedauer bestimmt der GitHub-Bot jede Woche neu anhand echter Daten. Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten, die das Modell beim Test nicht kannte.</p>
+      <p class="muted" style="margin:0;max-width:65ch">Der GitHub-Bot trainiert das Modell täglich auf den Stundenkerzen der letzten 12 Monate aller Coins der Beobachtungsliste. Für jede Kerze prüft er: Hätte ein Kauf nach Abzug der Bitvavo-Gebühren das Ziel vor dem Stop erreicht? Stop-Abstand, Ziel und Haltedauer bestimmt der GitHub-Bot jede Woche neu anhand echter Daten. Daraus lernt es, welche Signale gerade wirklich funktionieren, und gewichtet sie neu. Geprüft wird auf den jüngsten 25 % der Daten (rund 3 Monate), die das Modell beim Test nicht kannte. Bei 15m und 4h lernt die App selbst aus den letzten Wochen.</p>
       <div class="stats" id="mStats"></div>
       <div><span class="lbl">Gelernte Gewichte · rechts = spricht für Kauf, links = dagegen</span><div class="wts" id="mW" style="margin-top:8px"></div></div>
     </section>
@@ -306,7 +306,7 @@ function adx(h,l,c,n=14){const N=c.length,P=Array(N).fill(0),M=Array(N).fill(0),
 function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.length;i++){while(q.length&&q[0]<i-w)q.shift();o[i]=q.length?h[q[0]]:null;while(q.length&&h[q[q.length-1]]<=h[i])q.pop();q.push(i)}return o}
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
-function setBtc(){BTCX=new Map();const d=data['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
+function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
 function prep(cand){
   const ts=cand.map(x=>+x[0]),o=cand.map(x=>+x[1]),h=cand.map(x=>+x[2]),l=cand.map(x=>+x[3]),c=cand.map(x=>+x[4]),v=cand.map(x=>+x[5]);
   const e12=ema(c,12),e26=ema(c,26),mm=c.map((_,i)=>e12[i]-e26[i]),ms=ema(mm,9),mh=mm.map((x,i)=>x-ms[i]);
@@ -385,10 +385,11 @@ function fit(X,y,n,iters=160,K=ACTIVE.length){
 function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
 function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
 
-async function trainModel(){
+// src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
+async function trainModel(src=data,stride=1){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(data)){const d=data[mk];for(let i=210;i<d.c.length-H;i++){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i])continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -429,6 +430,13 @@ function analyze(m,d){
 /* ---------- Daten ---------- */
 // Vom GitHub-Bot ermittelter, nach Gebühren bester Trade-Aufbau
 async function loadGeo(){try{const g=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/aktuell.json?'+Date.now());if(g&&g.geo)GEO={...GEO,...g.geo};if(g&&g.merkmale)setFeatSet(g.merkmale)}catch(e){}}
+// Vom Bot täglich auf 12 Monaten trainiertes Modell (nur für die Zeiteinheit, auf der der Bot läuft)
+async function loadBotModel(){
+  try{const m=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/modell.json?'+Date.now());
+    if(!m||m.tf!==TF||!Array.isArray(m.w))return false;
+    setFeatSet(m.merkmale);if(m.w.length!==K)return false;
+    model={...m,from:new Date(m.from),to:new Date(m.to),bot:true};lastTrain=Date.now();return true}catch(e){return false}
+}
 async function loadMarkets(){
   const t=await j(API+'/ticker/24h');
   return t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||pf.some(p=>p.m===x.market)))
@@ -467,7 +475,7 @@ async function run(force){
     markets=markets.filter(m=>data[m.market]&&(eligible(m)||pf.some(p=>p.m===m.market)));
     for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
     setBtc();
-    if(full)await trainModel();
+    if(full&&!(await loadBotModel()))await trainModel();
     results={};markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
     journalUpdate();pfUpdate();checkAlerts();
     render();renderMood();renderCands();renderModel();renderJournal();renderPf();renderLog();
@@ -687,7 +695,7 @@ function renderMood(){
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
-  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · ${FEATSET==='v2'?'erweiterte Merkmale':'Basis-Merkmale'} (${K}) · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
+  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${FEATSET==='v2'?'erweiterte Merkmale':'Basis-Merkmale'} (${K}) · ${m.bot?'vom Bot, 12 Monate':'in der App gelernt'} · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
   const lift=m.top.win/m.baseWin;
   $('#mStats').innerHTML=`<div><span class="lbl">Gelernte Signale</span><b>${m.n.toLocaleString('de-CH')}</b></div>
    <div><span class="lbl">Trefferquote zufällig</span><b>${(m.baseWin*100).toFixed(0)}%</b></div>
