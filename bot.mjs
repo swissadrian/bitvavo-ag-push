@@ -6,9 +6,11 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
-const MIN_VOL=50000, MIN_VOL3D=250000;   // > 50k € in 24h UND > 250k € in den letzten 3 Tagen
-const vol3d=d=>{const n=Math.round(72/TFH[TF]);let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
-const eligible=m=>m.vol>=MIN_VOL&&(m.vol3d??0)>=MIN_VOL3D;
+const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k € am letzten Tag UND > 1 Mio. € in den letzten 30 Tagen
+// Umsatz in € der letzten h Stunden aus den Kerzen; null, wenn die geladenen Kerzen dafür nicht weit genug zurückreichen
+const volSum=(d,h)=>{const n=Math.round(h/TFH[TF]);if(d.c.length<n&&d.c.length>=HIST)return null;let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
+const vol3d=d=>volSum(d,72)??0;
+const eligible=m=>m.vol>=MIN_VOL&&(m.vol30d??0)>=MIN_VOL30;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
@@ -119,14 +121,6 @@ const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
 function outcome(d,i){
   return outcomeG(d,i,GEO);
-}
-// Wette auf fallende Kurse (Short): Ziel unter dem Einstieg, Stop darüber; Gebühren und Leihzins (ca. 13 % p. a.) in R
-const BORROW_H=0.000015;
-function outcomeShort(d,i,g=GEO){
-  const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e-g.tp*R,sl=e+R,H=Math.max(2,Math.round(g.h/TFH[TF]));
-  const cost=k=>(2*FEE+BORROW_H*(k-i)*TFH[TF])*e/R;
-  for(let k=i+1;k<=i+H&&k<d.c.length;k++){if(d.h[k]>=sl)return{y:0,r:-1-cost(k)};if(d.l[k]<=tp)return{y:1,r:g.tp-cost(k)}}
-  const k=Math.min(i+H,d.c.length-1);return{y:0,r:(e-d.c[k])/R-cost(k)};
 }
 function outcomeG(d,i,g){
   const e=d.c[i],a=d.A[i],R=Math.max(g.sl*a,g.minRisk*e),tp=e+g.tp*R,sl=e-R,H=Math.max(2,Math.round(g.h/TFH[TF]));
@@ -686,81 +680,60 @@ async function paperStep(){
 }
 const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
 
-/* ---------- Rückwärtstest: Wie hätte ein API-Bot in den letzten 12 Monaten abgeschnitten? (einmalig je Version) ---------- */
-// Walk-forward: Für jeden Monat werden ein Kauf-Modell und ein Short-Modell nur mit den 12 Monaten davor trainiert.
-// Danach werden mehrere Regeln durchgespielt (100 € pro Trade ohne Hebel, Start 1'000 €, max. 10 Positionen, Kosten inkl. Spread und Leihzins).
-const BT_V=3;
-function simulate(hist,idx,sig,hours,months,now,o){
-  const step=36e5,S={cash:1000,pos:{}},trades=[],eq=[],prevOn={};let mi=0;
-  const hsOf=mk=>o.spread===false?0:o.hs(mk);
-  const mark=(x,px)=>x.side>0?x.q*px*(1-hsOf(x.mk))*(1-PAPER.taker):x.cost+(x.entry-px*(1+hsOf(x.mk)))*x.q-x.q*px*PAPER.taker;
-  const val=t=>{let v=S.cash;for(const x of Object.values(S.pos)){const d=hist[x.mk];let i=idx[x.mk].get(t);if(i==null)i=x.li;v+=mark(x,d.c[i])}return v};
-  for(const t of hours){
-    while(mi+1<months.length&&t>=months[mi+1]){eq.push(val(months[mi+1]-step));mi++}
-    for(const [key,x] of Object.entries(S.pos)){const d=hist[x.mk],i=idx[x.mk].get(t);if(i==null)continue;x.li=i;const hs=hsOf(x.mk);let px=null,why='';
-      const L=x.side>0;
-      if(L?d.l[i]<=x.stop:d.h[i]>=x.stop){px=L?Math.min(x.stop,d.o[i]):Math.max(x.stop,d.o[i]);why='Stop-Loss'}
-      else if(L?d.h[i]>=x.tp:d.l[i]<=x.tp){px=x.tp;why='Ziel'}
-      else if(t+step-x.t>=GEO.h*36e5){px=d.c[i];why='Haltedauer'}
-      if(px!=null){let net;
-        if(L)net=x.q*px*(1-hs)*(1-PAPER.taker);
-        else{const buy=px*(1+hs),hrs=(t+step-x.t)/36e5;net=x.cost+(x.entry-buy)*x.q-x.q*buy*PAPER.taker-x.cost*BORROW_H*hrs}
-        S.cash+=net;trades.push({side:x.side,res:net-x.cost,why,m:new Date(x.t).toISOString().slice(0,7)});delete S.pos[key]}}
-    for(const [mk,m] of Object.entries(sig)){const s=m.get(t);if(!s||!s.elig)continue;
-      for(const side of [1,-1]){const want=side>0?o.long&&o.long(s):o.short&&o.short(s)&&s.shortbar;const key=(side>0?'L:':'S:')+mk,on=!!want,prev=prevOn[key];prevOn[key]=on;if(!on||prev)continue;
-        if(S.pos['L:'+mk]||S.pos['S:'+mk]||Object.keys(S.pos).length>=PAPER.maxPos||S.cash<100)continue;
-        const d=hist[mk],i=s.i,hs=hsOf(mk),R=riskOf(d.c[i],d.A[i]);S.cash-=100;
-        if(side>0){const e=d.c[i]*(1+hs);S.pos[key]={mk,side,entry:e,q:100/(e*(1+PAPER.taker)),cost:100,t:t+step,R,stop:e-R,tp:e+GEO.tp*R,li:i}}
-        else{const e=d.c[i]*(1-hs),q=100/(e*(1+PAPER.taker));S.pos[key]={mk,side,entry:e,q,cost:100,t:t+step,R,stop:e+R,tp:e-GEO.tp*R,li:i}}}}
-  }
-  while(eq.length<months.length)eq.push(val(now-now%step-step));
-  let prev=1000;const monate=months.map((m,k)=>{const mm=new Date(m).toISOString().slice(0,7),r={monat:mm,pct:+((eq[k]-prev)/10).toFixed(2),trades:trades.filter(x=>x.m===mm).length};prev=eq[k];return r});
-  const res=trades.map(x=>x.res),w=res.filter(r=>r>0),sh=trades.filter(x=>x.side<0);
-  return{gesamt_pct:+((eq.at(-1)-1000)/10).toFixed(2),tiefster_stand:+Math.min(1000,...eq).toFixed(2),trades:trades.length,shorts:sh.length,
-    short_ergebnis:+sh.reduce((a,x)=>a+x.res,0).toFixed(2),long_ergebnis:+trades.filter(x=>x.side>0).reduce((a,x)=>a+x.res,0).toFixed(2),
-    gewinner_pct:trades.length?Math.round(w.length/trades.length*100):0,schnitt_eur:trades.length?+(res.reduce((a,b)=>a+b,0)/trades.length).toFixed(2):0,monate};
-}
-async function backtest(){
-  if(st.btV===BT_V)return;const t0=Date.now();
-  const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
-  const hist={};await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300)hist[mk]=prep(rows,mk)});
-  setBtc(hist);await loadFgHistory();setFeatSet(st.featSet||'v1');if(st.geo)GEO={...GEO,...st.geo};
+/* ---------- Trendfolge-Test auf Tageskerzen (einmalig je Version): nur kaufen und halten, kein Hebel, kein Short ---------- */
+// Feste, vorab gewählte Regeln (keine Optimierung): Durchschnitt 50, 100 und 200 Tage werden alle gezeigt.
+// Kauf/Verkauf jeweils zum Eröffnungskurs des Folgetags, Kosten 0,25 % plus halber Spread je Coin.
+const TREND_V=1;
+async function trendTest(){
+  if(st.trendV===TREND_V)return;const t0=Date.now(),D=864e5,now=Date.now(),start=Date.UTC(2019,0,1),today=Math.floor(now/D)*D;
+  const tk=await j(API+'/ticker/24h');
+  const cand=tk.filter(x=>x.market?.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.volumeQuote>=MIN_VOL).map(x=>x.market);if(!cand.includes('BTC-EUR'))cand.push('BTC-EUR');
+  const raw={};
+  await pool(cand,3,async mk=>{const m=new Map();for(let s=start;s<today;s+=1440*D){const e=Math.min(today-1,s+1440*D-1);
+    for(const k of (await j(`${API}/${mk}/candles?interval=1d&limit=1440&start=${s}&end=${e}`))||[]){const t=+k[0];if(t<today)m.set(t,{o:+k[1],c:+k[4],v:+k[5]})}}if(m.size>=60)raw[mk]=m});
   let live={};try{live=JSON.parse(fs.readFileSync(LOG+'/analyse/live.json','utf8')).orderbuch||{}}catch(e){}
-  const hs=mk=>clip((live[mk]?.spread??0.3)/200,0.0002,0.01);
-  // Short nur auf grossen Coins (Bitvavo: «20+ Assets» mit Hebel); Annahme: die 25 umsatzstärksten
-  const shortable=new Set(markets.filter(eligible).sort((a,b)=>b.vol-a.vol).slice(0,25).map(m=>m.market));
-  const step=36e5,H=horBars(),now=Date.now(),months=[];
-  for(let k=12;k>=0;k--){const d=new Date(now);d.setUTCDate(1);d.setUTCHours(0,0,0,0);d.setUTCMonth(d.getUTCMonth()-k);months.push(+d)}
-  const idx={};for(const [mk,d] of Object.entries(hist)){const m=new Map();d.ts.forEach((t,i)=>m.set(t,i));idx[mk]=m}
-  const vEur=(d,i,n)=>{let s=0;for(let k=Math.max(0,i-n+1);k<=i;k++)s+=d.v[k]*d.c[k];return s};
-  const sig={},diag=[],hours=[],stride=Math.max(1,Math.round(Object.values(hist).reduce((s,d)=>s+d.c.length,0)/2/450000));
-  for(let mi=0;mi<months.length;mi++){
-    const mStart=months[mi],mEnd=mi+1<months.length?months[mi+1]:now;
-    await trainModel(hist,stride,mStart-365*DAY_MS,mStart-H*step);const mL=model;
-    await trainModel(hist,stride,mStart-365*DAY_MS,mStart-H*step,outcomeShort);const mS=model;
-    let nL=0,nS=0;
-    for(let t=Math.ceil(mStart/step)*step;t<mEnd;t+=step){hours.push(t);
-      for(const [mk,d] of Object.entries(hist)){const i=idx[mk].get(t);if(i==null||i<210||!d.A[i])continue;const x=feat(d,i);
-        model=mL;const cL=calib(predict(mL,x));model=mS;const cS=calib(predict(mS,x));
-        const e={q:cL.q,lvl:cL.r>=.25?2:cL.r>=.08?1:0,sq:cS.q,slvl:cS.r>=.25?2:cS.r>=.08?1:0,i,elig:vEur(d,i,24)>=MIN_VOL&&vEur(d,i,72)>=MIN_VOL3D,shortbar:shortable.has(mk)};
-        (sig[mk]||(sig[mk]=new Map())).set(t,e);if(e.lvl>=2)nL++;if(e.slvl>=2&&e.shortbar)nS++}}
-    diag.push({monat:new Date(mStart).toISOString().slice(0,7),kauf_modell_top10_r:+mL.top.r.toFixed(3),short_modell_top10_r:+mS.top.r.toFixed(3),stunden_starker_kauf:nL,stunden_starker_short:nS});
-    console.log(`Rückwärtstest ${diag.at(-1).monat}: Kauf-Modell ${fmtR(mL.top.r)}, Short-Modell ${fmtR(mS.top.r)}`);
-  }
-  const V={
-    'nur Kauf, Starker Kauf (Regeln wie heute, ohne Nachzieh-Stop)':{long:s=>s.lvl>=2},
-    'nur Short, Starker Short':{short:s=>s.slvl>=2},
-    'Kauf und Short, je nur bei starkem Signal':{long:s=>s.lvl>=2,short:s=>s.slvl>=2},
-    'nur Short, immer die besten 10 %':{short:s=>s.sq===9},
-    'Kauf und Short, immer die besten 10 %':{long:s=>s.q===9,short:s=>s.sq===9},
-  };
-  const out={erstellt:new Date().toISOString(),regeln:{betrag:100,hebel:1,kapital:1000,maxPos:PAPER.maxPos,geo:GEO,merkmale:FEATSET,leihzins_pa:+(BORROW_H*24*365*100).toFixed(1),short_coins:[...shortable]},diagnose:diag,varianten:{}};
-  for(const [name,v] of Object.entries(V))out.varianten[name]=simulate(hist,idx,sig,hours,months,now,{...v,hs});
-  const B=hist['BTC-EUR'],btcAt=t=>{let i=B.ts.findIndex(x=>x>=t);if(i<0)i=B.ts.length-1;return B.c[i]};
-  out.btc=months.map((m,i)=>({monat:new Date(m).toISOString().slice(0,7),pct:+((btcAt(i+1<months.length?months[i+1]:now)/btcAt(m)-1)*100).toFixed(2)}));
-  out.dauer_s=Math.round((Date.now()-t0)/1e3);
-  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/rueckwaertstest_short.json',JSON.stringify(out,null,1));
-  st.btV=BT_V;console.log(`Rückwärtstest Short fertig (${out.dauer_s} s)`);
+  const cost=mk=>PAPER.taker+clip((live[mk]?.spread??0.3)/200,0.0001,0.01);
+  // gemeinsame Tagesachse ab dem ersten Bitcoin-Tag
+  const B=raw['BTC-EUR'],t0d=Math.min(...B.keys()),days=[];for(let t=t0d;t<today;t+=D)days.push(t);
+  const A={};for(const [mk,m] of Object.entries(raw)){const o=[],c=[],ve=[];for(const t of days){const x=m.get(t);o.push(x?x.o:NaN);c.push(x?x.c:NaN);ve.push(x?x.v*x.c:NaN)}
+    const sma={};for(const N of [50,100,200]){const a=new Array(days.length).fill(NaN);let s=0,n=0;for(let i=0;i<days.length;i++){if(c[i]===c[i]){s+=c[i];n++}else{s=0;n=0}
+      if(n>N){s-=c[i-N];n=N}if(n===N)a[i]=s/N}sma[N]=a}
+    const v30=new Array(days.length).fill(0);let s=0;for(let i=0;i<days.length;i++){s+=ve[i]===ve[i]?ve[i]:0;if(i>=30)s-=ve[i-30]===ve[i-30]?ve[i-30]:0;v30[i]=s}
+    A[mk]={o,c,ve,sma,v30}}
+  const i0=days.findIndex((_,i)=>A['BTC-EUR'].sma[200][i]===A['BTC-EUR'].sma[200][i]);
+  const top10=i=>Object.entries(A).filter(([mk,a])=>a.ve[i]>=MIN_VOL&&a.v30[i]>=MIN_VOL30&&a.c[i]===a.c[i]).sort((x,y)=>y[1].v30[i]-x[1].v30[i]).slice(0,10).map(x=>x[0]);
+  // Simulation: wants(i) liefert die gewünschten Coins für den nächsten Tag; Gewicht je Coin = w (1 bei Bitcoin, 0,1 bei Top 10)
+  function sim(name,w,decideDay,wants){
+    let cash=1000,hold={},fees=0,trades=0,inv=0;const eq=[];
+    for(let i=i0;i<days.length;i++){
+      // Ausführung zum Eröffnungskurs (Entscheid vom Vortag)
+      if(i>i0&&decideDay(i-1)){const want=new Set(wants(i-1));
+        for(const mk of Object.keys(hold))if(!want.has(mk)){const px=A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].c[i-1];const val=hold[mk]*px,f=val*cost(mk);cash+=val-f;fees+=f;trades++;delete hold[mk]}
+        let value=cash;for(const [mk,q] of Object.entries(hold))value+=q*(A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].c[i-1]);
+        for(const mk of want)if(!hold[mk]&&A[mk].o[i]===A[mk].o[i]){const amt=Math.min(cash,value*w);if(amt<1)continue;const f=amt*cost(mk);hold[mk]=(amt-f)/A[mk].o[i];cash-=amt;fees+=f;trades++}}
+      let v=cash;for(const [mk,q] of Object.entries(hold)){const px=A[mk].c[i]===A[mk].c[i]?A[mk].c[i]:A[mk].o[i];v+=q*(px===px?px:0)}
+      if(Object.keys(hold).length)inv++;eq.push(v)}
+    return{name,eq,fees,trades,anteil_investiert:inv/eq.length}}
+  const mon=i=>new Date(days[i]).getUTCDay()===1,first=i=>new Date(days[i]).getUTCDate()===1;
+  const S=[sim('Bitcoin halten',1,i=>i===i0,()=>['BTC-EUR'])];
+  for(const N of [50,100,200])S.push(sim(`Bitcoin mit Trendfilter ${N} Tage`,1,()=>true,i=>A['BTC-EUR'].c[i]>A['BTC-EUR'].sma[N][i]?['BTC-EUR']:[]));
+  S.push(sim('Top 10 halten (monatlich neu gewählt)',0.1,i=>i===i0||first(i),top10));
+  for(const N of [50,100,200])S.push(sim(`Top 10 mit Trendfilter ${N} Tage (wöchentlich)`,0.1,i=>i===i0||mon(i),i=>top10(i).filter(mk=>A[mk].c[i]>A[mk].sma[N][i])));
+  // Sparplan: jeden Monatsersten 100 € in Bitcoin
+  let q=0,inv=0;const dca=[];for(let i=i0;i<days.length;i++){if(i===i0||first(i)){const px=A['BTC-EUR'].o[i];q+=100*(1-cost('BTC-EUR'))/px;inv+=100}dca.push({t:days[i],wert:q*A['BTC-EUR'].c[i],eingezahlt:inv})}
+  // Kennzahlen
+  const yrs=(days.length-1-i0)/365,stat=s=>{const e=s.eq;let pk=e[0],dd=0;for(const v of e){pk=Math.max(pk,v);dd=Math.min(dd,v/pk-1)}
+    const jahr={};for(let k=0;k<e.length;k++){const y=new Date(days[i0+k]).getUTCFullYear();(jahr[y]||(jahr[y]={a:k>0?e[k-1]:e[0]})).e=e[k]}
+    const l12=e.length>365?(e.at(-1)/e[e.length-366]-1)*100:null;
+    return{name:s.name,ende:+e.at(-1).toFixed(0),gesamt_pct:+((e.at(-1)/1000-1)*100).toFixed(1),pro_jahr_pct:+((Math.pow(e.at(-1)/1000,1/yrs)-1)*100).toFixed(1),
+      max_rueckgang_pct:+(dd*100).toFixed(1),letzte_12_monate_pct:l12!=null?+l12.toFixed(1):null,trades:s.trades,gebuehren:+s.fees.toFixed(0),investiert_pct:Math.round(s.anteil_investiert*100),
+      jahre:Object.fromEntries(Object.entries(jahr).map(([y,x])=>[y,+((x.e/x.a-1)*100).toFixed(1)]))}};
+  const out={erstellt:new Date().toISOString(),von:new Date(days[i0]).toISOString().slice(0,10),bis:new Date(days.at(-1)).toISOString().slice(0,10),jahre:+yrs.toFixed(1),
+    coins_mit_daten:Object.keys(A).length,regeln:{kapital:1000,kosten:'0,25 % + halber Spread je Coin',ausfuehrung:'Eröffnungskurs Folgetag',kein_hebel:true,kein_short:true},
+    strategien:S.map(stat),sparplan:{eingezahlt:dca.at(-1).eingezahlt,wert:+dca.at(-1).wert.toFixed(0),gewinn_pct:+((dca.at(-1).wert/dca.at(-1).eingezahlt-1)*100).toFixed(1)},
+    verlauf:days.slice(i0).map((t,k)=>k%7&&k!==days.length-1-i0?null:{t:new Date(t).toISOString().slice(0,10),...Object.fromEntries(S.map(s=>[s.name,+s.eq[k].toFixed(0)]))}).filter(Boolean)};
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/trendtest.json',JSON.stringify(out,null,1));
+  st.trendV=TREND_V;console.log(`Trendfolge-Test fertig (${Math.round((Date.now()-t0)/1e3)} s, ${out.von} bis ${out.bis}, ${out.coins_mit_daten} Coins)`);
 }
 
 /* ---------- Hauptlauf ---------- */
@@ -772,10 +745,10 @@ async function main(){
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
   console.log(`${markets.length} Märkte über 50k € in 24h, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
   await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows,m.market)});
-  markets.forEach(m=>{if(data[m.market])m.vol3d=vol3d(data[m.market])});
+  markets.forEach(m=>{const d=data[m.market];if(d){m.vol3d=vol3d(d);m.vol30d=volSum(d,720)??vol3d(d)*10}});
   markets=markets.filter(m=>data[m.market]&&(eligible(m)||st.pos[m.market]));
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
-  console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
+  console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >1 Mio. €/30 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
   await repair1m().catch(e=>console.warn('Reparatur 1-Minuten-Log',e.message));
   await logExt().catch(e=>console.warn('Zusatzdaten',e.message));
@@ -825,7 +798,7 @@ async function main(){
   try{retro()}catch(e){console.warn('Rückblick',e.message)}
   await paperStep().catch(e=>console.warn('Papierhandel',e.message));
   logRun(buys);
-  await backtest().catch(e=>console.warn('Rückwärtstest',e.stack||e.message));
+  await trendTest().catch(e=>console.warn('Trendfolge-Test',e.stack||e.message));
   console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
 

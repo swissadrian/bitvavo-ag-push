@@ -1,6 +1,6 @@
 # Bitvavo Signal-Bot
 
-Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 50'000 € Volumen in 24h **und** mehr als 250'000 € in den letzten 3 Tagen. So kommen auch Coins mit plötzlichem Volumenanstieg (Pumps) auf die Liste, während Coins ohne nennenswerten Handel draussen bleiben. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
+Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 50'000 € Volumen am letzten Tag **und** mehr als 1 Mio. € in den letzten 30 Tagen. So bleiben kleine Coins mit wenig Handel draussen. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
 
 - bei jedem **neuen** Kauf-Signal (Standard: nur «Starker Kauf»)
 - bei Verkaufsempfehlungen für deine Coins: Stop erreicht, Ziel erreicht, Modell negativ, stark überkauft
@@ -77,6 +77,17 @@ Die Kurse im Logbuch sind eine Kopie dessen, was Bitvavo jederzeit wieder liefer
 - **Marktstimmung:** Fear & Greed, Gesamt-Marktkapitalisierung und ihre 24h-Veränderung, BTC- und ETH-Dominanz, die Trending-Liste von CoinGecko.
 
 Jede Woche prüft der Bot jede Merkmalgruppe einzeln: einmal mit, einmal ohne, auf denselben unbekannten Testdaten nach Gebühren. Eine Gruppe wird nur genutzt, wenn sie die Vorhersage spürbar verbessert. Fear & Greed gibt es rückwirkend seit 2018, das wird sofort geprüft. Orderbuch und CoinGecko werden ab 90 gesammelten Tagen geprüft. Bis dahin steht in `analyse/merkmale.csv` «wartet (x/90 Tage)».
+
+## Trendfolge-Test (Tageskerzen)
+
+Einmalig rechnet der Bot nach, wie langsame Trendfolge seit 2019 abgeschnitten hätte. Er handelt nur Käufe, ohne Hebel und ohne Short. Gekauft und verkauft wird zum Eröffnungskurs des Folgetags. Die Kosten betragen 0,25 % plus den halben Spread je Coin. Verglichen werden:
+- **Bitcoin halten**
+- **Bitcoin mit Trendfilter:** halten, solange der Tagesschluss über dem Durchschnitt der letzten 50, 100 bzw. 200 Tage liegt, sonst Euro.
+- **Top 10 halten:** die 10 Coins mit dem meisten Umsatz, jeden Monat neu gewählt.
+- **Top 10 mit Trendfilter:** dieselben 10 Coins mit Trendfilter, wöchentlich geprüft, 10 % pro Coin.
+- **Sparplan:** jeden Monat 100 € in Bitcoin.
+
+Alle drei Durchschnitte werden gezeigt und nicht der beste ausgewählt, damit das Ergebnis nicht geschönt ist. Ergebnis in `analyse/trendtest.json`. Coins, die Bitvavo inzwischen gestrichen hat, fehlen in der Rechnung. Das macht das Ergebnis eher etwas zu gut.
 
 ## Logbuch
 
