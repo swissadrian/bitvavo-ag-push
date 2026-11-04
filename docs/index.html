@@ -199,6 +199,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <div class="learn">
     <section class="panel" aria-label="Mein Portfolio">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Mein Portfolio</h2><span class="muted num" id="pfSum"></span></div>
+      <div class="stats" id="pfStats" hidden></div>
       <div id="pfList"></div>
       <span class="muted" style="font-size:12px" id="pfClosed"></span>
     </section>
@@ -597,16 +598,26 @@ function advice(p){
 function pfUpdate(){pf.forEach(p=>{const l=curOf(p.m);if(l==null)return;p.high=Math.max(p.high,l);if(l>=p.tp)p.tpHit=true});store('bvr-pf',pf)}
 function renderPf(){
   const el=$('#pfList');
-  if(!pf.length){el.innerHTML='<div class="muted" style="padding:6px 0">Noch keine Coins eingetragen. Tippe in der Liste auf einen Coin und trage unter «Meine Position» deinen Kaufpreis ein.</div>';$('#pfSum').textContent='';}
+  if(!pf.length){el.innerHTML='<div class="muted" style="padding:6px 0">Noch keine Coins eingetragen. Tippe in der Liste auf einen Coin und trage unter «Meine Position» deinen Kauf ein.</div>';}
   else el.innerHTML=pf.map(p=>{const a=advice(p),b=p.m.replace('-EUR','');return `<div class="pfrow" tabindex="0" data-m="${p.m}">
     <div><b class="sym">${b}</b><div class="muted num" style="font-size:11px">${p.qty?fmtQ(p.qty,qDec(p.m,p.buy))+' × ':''}${fmtP(p.buy)} € → ${a.last!=null?fmtP(a.last):'–'} €</div></div>
     <div class="num ${a.pnl>=0?'up':'down'}" style="text-align:right">${pct(a.pnl)}${a.eur!=null?`<div style="font-size:11px">${a.eur>=0?'+':''}${a.eur.toFixed(2)} €</div>`:''}</div>
     <div style="text-align:right"><span class="pill ${a.cls}">${a.label}</span></div>
     <div class="muted" style="grid-column:1/-1;font-size:12px">${a.why}</div></div>`}).join('');
-  if(pf.length){const eur=pf.reduce((s,p)=>{const a=advice(p);return s+(a.eur||0)},0),hasQ=pf.some(p=>p.qty),sells=pf.filter(p=>!['hold','na'].includes(advice(p).act)).length;
-    $('#pfSum').innerHTML=`${pf.length} Positionen${hasQ?` · <span class="${eur>=0?'up':'down'}">${eur>=0?'+':''}${eur.toFixed(2)} €</span>`:''}${sells?` · <span class="down">${sells} mit Handlungsbedarf</span>`:''}`}
+  // Gesamtübersicht: nur Positionen mit bekannter Menge und aktuellem Kurs
+  const known=pf.filter(p=>p.qty&&curOf(p.m)!=null),missing=pf.filter(p=>!p.qty).map(p=>p.m.replace('-EUR',''));
+  const inv=known.reduce((s,p)=>s+(p.cost??p.buy*p.qty*(1+FEE)),0),val=known.reduce((s,p)=>s+p.qty*curOf(p.m)*(1-FEE),0),gl=val-inv,glp=inv?gl/inv*100:0;
+  const sells=pf.filter(p=>!['hold','na'].includes(advice(p).act)).length;
+  $('#pfStats').hidden=!known.length;
+  $('#pfStats').innerHTML=known.length?`<div><span class="lbl">Aktueller Wert</span><b>${val.toFixed(2)} €</b></div>
+    <div><span class="lbl">Investiert</span><b>${inv.toFixed(2)} €</b></div>
+    <div><span class="lbl">Gewinn / Verlust</span><b class="${gl>=0?'up':'down'}">${gl>=0?'+':''}${gl.toFixed(2)} €</b></div>
+    <div><span class="lbl">Gewinn / Verlust %</span><b class="${gl>=0?'up':'down'}">${pct(glp)}</b></div>
+    <div class="muted" style="grid-column:1/-1;font-size:12px">Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Wert nach Verkaufsgebühr, Investiert inkl. Kaufgebühr${missing.length?` · ohne ${missing.join(', ')} (Menge fehlt)`:''}</div>`:'';
+  $('#pfSum').innerHTML=pf.length?`${pf.length} Position${pf.length>1?'en':''}${sells?` · <span class="down">${sells} mit Handlungsbedarf</span>`:''}`:'';
   const real=closed.length?closed.reduce((s,c)=>s+c.pnl,0)/closed.length:null;
-  $('#pfClosed').textContent=closed.length?`Abgeschlossene Trades: ${closed.length}, davon ${closed.filter(c=>c.pnl>0).length} im Gewinn, Ø ${pct(real)}`:'';
+  const realEur=closed.reduce((s,c)=>s+(c.eur||0),0),hasEur=closed.some(c=>c.eur!=null);
+  $('#pfClosed').textContent=closed.length?`Abgeschlossene Verkäufe: ${closed.length}, davon ${closed.filter(c=>c.pnl>0).length} im Gewinn, Ø ${pct(real)}${hasEur?` · realisiert ${realEur>=0?'+':''}${realEur.toFixed(2)} €`:''}`:'';
 }
 /* ---------- Kauf- und Verkaufsmaske: Betrag wählen, Stückzahl nach Gebühren berechnen ---------- */
 const AMOUNTS=[50,100,150,200];let draft={},mkInfo={};
