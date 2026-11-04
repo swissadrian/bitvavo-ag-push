@@ -307,7 +307,12 @@ function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.l
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
 function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
-function prep(cand){
+// Zusätzliche Daten, die Bitvavo-Kerzen nicht enthalten: Fear & Greed (Tag), Orderbuch je Markt (Stunde), CoinGecko-Marktdaten (Stunde)
+const EXT={fg:new Map(),ob:new Map(),cg:new Map()},HOUR=36e5,DAYMS=864e5;
+function fgAt(ts){const v=EXT.fg.get(Math.floor(ts/DAYMS)*DAYMS);return v==null?null:v}
+function obAt(mk,ts){const m=EXT.ob.get(mk);if(!m)return null;const h=Math.floor(ts/HOUR)*HOUR;return m.get(h)||m.get(h-HOUR)||m.get(h-2*HOUR)||null}
+function cgAt(ts){const h=Math.floor(ts/HOUR)*HOUR;return EXT.cg.get(h)||EXT.cg.get(h-HOUR)||EXT.cg.get(h-2*HOUR)||null}
+function prep(cand,mk=''){
   const ts=cand.map(x=>+x[0]),o=cand.map(x=>+x[1]),h=cand.map(x=>+x[2]),l=cand.map(x=>+x[3]),c=cand.map(x=>+x[4]),v=cand.map(x=>+x[5]);
   const e12=ema(c,12),e26=ema(c,26),mm=c.map((_,i)=>e12[i]-e26[i]),ms=ema(mm,9),mh=mm.map((x,i)=>x-ms[i]);
   const B=boll(c),bw=B.map((b,i)=>b?(b.u-b.l)/b.m:null),vr=v.map((x,i)=>{if(i<20)return 1;let s=0;for(let k=i-20;k<i;k++)s+=v[k];return x/((s/20)||1e-9)});
@@ -315,7 +320,7 @@ function prep(cand){
   const vw=c.map((_,i)=>{const a=Math.max(0,i-D+1),sv=pv[i+1]-pv[a];return sv>0?(pp[i+1]-pp[a])/sv:c[i]});          // VWAP der letzten 24h
   const rv=c.map((_,i)=>{if(i<8*D)return 1;const v24=pv[i+1]-pv[i+1-D],v7=(pv[i+1-D]-pv[i+1-8*D])/7;return v24/(v7||1e-9)}); // 24h-Volumen ggü. Schnitt der 7 Tage davor
   const AX=adx(h,l,c);
-  return{ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr,vw,rv,adx:AX.X,pdi:AX.P,mdi:AX.M,hi24:priorMax(h,D),hi7:priorMax(h,7*D)};
+  return{mk,ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr,vw,rv,adx:AX.X,pdi:AX.P,mdi:AX.M,hi24:priorMax(h,D),hi7:priorMax(h,7*D)};
 }
 
 /* ---------- Merkmale, aus denen das Modell lernt ---------- */
@@ -338,24 +343,41 @@ const FEATS=[
  {n:'Abstand zu EMA 50',num:1,f:(d,i)=>clip((d.c[i]-d.e50[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' EMA 50'},
 
  // Erweiterung v2: VWAP, ADX, relatives Volumen, Ausbrüche, Bitcoin-Marktlage, Tageszeit, Kombinationen
- {v2:1,n:'Abstand zum 24h-VWAP',num:1,f:(d,i)=>clip((d.c[i]-d.vw[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' dem 24h-VWAP'},
- {v2:1,n:'Trendstärke (ADX)',num:1,f:(d,i)=>clip(d.adx[i]/50,0,1.5),t:v=>'ADX '+(v*50).toFixed(0)+': '+(v*50>=25?'kräftiger Trend':'kaum Trend')},
- {v2:1,n:'ADX-Richtung',f:(d,i)=>d.adx[i]>=25?(d.pdi[i]>d.mdi[i]?1:-1):0,t:v=>v>0?'Starker Trend nach oben (ADX ≥ 25, +DI vorne)':'Starker Trend nach unten (ADX ≥ 25, −DI vorne)'},
- {v2:1,n:'Relatives Volumen 24h/7T',num:1,f:(d,i)=>clip(Math.log2(d.rv[i]||1),-2,3),t:v=>'Volumen 24h '+(2**v).toFixed(1)+'× der Vorwoche'},
- {v2:1,n:'Abstand zum 24h-Hoch',num:1,f:(d,i)=>d.hi24[i]==null?0:clip((d.c[i]-d.hi24[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>v>=0?'Über dem 24h-Hoch':'Kurs '+Math.abs(v*3).toFixed(1)+' ATR unter dem 24h-Hoch'},
- {v2:1,n:'Ausbruch über 7-Tage-Hoch',f:(d,i)=>d.hi7[i]!=null&&d.c[i]>d.hi7[i]?1:0,t:()=>'Ausbruch über das 7-Tage-Hoch'},
- {v2:1,n:'Bitcoin 24h',num:1,f:(d,i)=>clip(((BTCX.get(d.ts[i])||[0])[0])*10,-1.5,1.5),t:v=>'Bitcoin 24h '+pct(v*10)},
- {v2:1,n:'Bitcoin-Trend',f:(d,i)=>(BTCX.get(d.ts[i])||[0,0])[1],t:v=>v>0?'Bitcoin über EMA 50 (Rückenwind)':'Bitcoin unter EMA 50 (Gegenwind)'},
- {v2:1,n:'Session Europa (7–13 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=7&&h<13?1:0},t:()=>'Europa-Session'},
- {v2:1,n:'Session USA (13–21 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=13&&h<21?1:0},t:()=>'US-Session'},
- {v2:1,n:'Session spät (21–24 UTC)',f:(d,i)=>new Date(d.ts[i]).getUTCHours()>=21?1:0,t:()=>'Späte Session'},
- {v2:1,n:'RSI tief im Aufwärtstrend',f:(d,i)=>d.R[i]<40&&d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]?1:0,t:(v,d,i)=>'Rücksetzer im Aufwärtstrend (RSI '+d.R[i].toFixed(0)+')'},
- {v2:1,n:'Ausbruch mit Volumen',f:(d,i)=>d.hi24[i]!=null&&d.c[i]>d.hi24[i]&&d.vr[i]>1.5?1:0,t:(v,d,i)=>'Ausbruch über das 24h-Hoch mit '+d.vr[i].toFixed(1)+'× Volumen'},
- {v2:1,n:'Coin und Bitcoin im Aufwärtstrend',f:(d,i)=>d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]&&(BTCX.get(d.ts[i])||[0,0])[1]>0?1:0,t:()=>'Coin und Bitcoin beide im Aufwärtstrend'},
+ {g:'v2',n:'Abstand zum 24h-VWAP',num:1,f:(d,i)=>clip((d.c[i]-d.vw[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' dem 24h-VWAP'},
+ {g:'v2',n:'Trendstärke (ADX)',num:1,f:(d,i)=>clip(d.adx[i]/50,0,1.5),t:v=>'ADX '+(v*50).toFixed(0)+': '+(v*50>=25?'kräftiger Trend':'kaum Trend')},
+ {g:'v2',n:'ADX-Richtung',f:(d,i)=>d.adx[i]>=25?(d.pdi[i]>d.mdi[i]?1:-1):0,t:v=>v>0?'Starker Trend nach oben (ADX ≥ 25, +DI vorne)':'Starker Trend nach unten (ADX ≥ 25, −DI vorne)'},
+ {g:'v2',n:'Relatives Volumen 24h/7T',num:1,f:(d,i)=>clip(Math.log2(d.rv[i]||1),-2,3),t:v=>'Volumen 24h '+(2**v).toFixed(1)+'× der Vorwoche'},
+ {g:'v2',n:'Abstand zum 24h-Hoch',num:1,f:(d,i)=>d.hi24[i]==null?0:clip((d.c[i]-d.hi24[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>v>=0?'Über dem 24h-Hoch':'Kurs '+Math.abs(v*3).toFixed(1)+' ATR unter dem 24h-Hoch'},
+ {g:'v2',n:'Ausbruch über 7-Tage-Hoch',f:(d,i)=>d.hi7[i]!=null&&d.c[i]>d.hi7[i]?1:0,t:()=>'Ausbruch über das 7-Tage-Hoch'},
+ {g:'v2',n:'Bitcoin 24h',num:1,f:(d,i)=>clip(((BTCX.get(d.ts[i])||[0])[0])*10,-1.5,1.5),t:v=>'Bitcoin 24h '+pct(v*10)},
+ {g:'v2',n:'Bitcoin-Trend',f:(d,i)=>(BTCX.get(d.ts[i])||[0,0])[1],t:v=>v>0?'Bitcoin über EMA 50 (Rückenwind)':'Bitcoin unter EMA 50 (Gegenwind)'},
+ {g:'v2',n:'Session Europa (7–13 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=7&&h<13?1:0},t:()=>'Europa-Session'},
+ {g:'v2',n:'Session USA (13–21 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=13&&h<21?1:0},t:()=>'US-Session'},
+ {g:'v2',n:'Session spät (21–24 UTC)',f:(d,i)=>new Date(d.ts[i]).getUTCHours()>=21?1:0,t:()=>'Späte Session'},
+ {g:'v2',n:'RSI tief im Aufwärtstrend',f:(d,i)=>d.R[i]<40&&d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]?1:0,t:(v,d,i)=>'Rücksetzer im Aufwärtstrend (RSI '+d.R[i].toFixed(0)+')'},
+ {g:'v2',n:'Ausbruch mit Volumen',f:(d,i)=>d.hi24[i]!=null&&d.c[i]>d.hi24[i]&&d.vr[i]>1.5?1:0,t:(v,d,i)=>'Ausbruch über das 24h-Hoch mit '+d.vr[i].toFixed(1)+'× Volumen'},
+ {g:'v2',n:'Coin und Bitcoin im Aufwärtstrend',f:(d,i)=>d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]&&(BTCX.get(d.ts[i])||[0,0])[1]>0?1:0,t:()=>'Coin und Bitcoin beide im Aufwärtstrend'},
+
+ // Stimmung (Fear & Greed, rückwirkend verfügbar)
+ {g:'fg',n:'Fear & Greed',num:1,f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:(v-50)/25},t:v=>'Fear & Greed '+Math.round(v*25+50)},
+ {g:'fg',n:'Fear & Greed 7 Tage',num:1,f:(d,i)=>{const a=fgAt(d.ts[i]),b=fgAt(d.ts[i]-7*DAYMS);return a==null||b==null?NaN:clip((a-b)/20,-2,2)},t:v=>'Fear & Greed '+(v>0?'+':'')+Math.round(v*20)+' Punkte in 7 Tagen'},
+ {g:'fg',n:'Extreme Angst (F&G < 25)',f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:v<25?1:0},t:()=>'Extreme Angst am Markt'},
+ // Orderbuch (wird vom Bot gesammelt)
+ {g:'ob',n:'Spread',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.spread+0.01)+1,-1,3):NaN},t:v=>'Spread '+(10**(v-1)-0.01).toFixed(2)+' %'},
+ {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' €'},
+ {g:'ob',n:'Orderbuch-Ungleichgewicht',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?o.imb:NaN},t:v=>v>0?'Mehr Kauf- als Verkaufsaufträge nahe am Kurs':'Mehr Verkaufs- als Kaufaufträge nahe am Kurs'},
+ // CoinGecko-Marktdaten (werden vom Bot gesammelt)
+ {g:'cg',n:'Gesamtmarkt 24h',num:1,f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.chg!=null?clip(c.chg/5,-2,2):NaN},t:v=>'Krypto-Gesamtmarkt 24h '+pct(v*5)},
+ {g:'cg',n:'BTC-Dominanz 24h',num:1,f:(d,i)=>{const a=cgAt(d.ts[i]),b=cgAt(d.ts[i]-DAYMS);return a&&b&&a.dom!=null&&b.dom!=null?clip(a.dom-b.dom,-2,2):NaN},t:v=>'BTC-Dominanz '+(v>0?'+':'')+v.toFixed(2)+' Prozentpunkte in 24h'},
+ {g:'cg',n:'Trending auf CoinGecko',f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.tr?(c.tr.has(d.mk.split('-')[0])?1:0):NaN},t:()=>'Trending auf CoinGecko'},
 ];
-// Welche Merkmale aktiv sind, entscheidet der wöchentliche Vergleich des Bots (v1 = bisher, v2 = erweitert)
-let FEATSET='v1',ACTIVE=FEATS.filter(F=>!F.v2),K=ACTIVE.length;
-function setFeatSet(s){FEATSET=s==='v2'?'v2':'v1';ACTIVE=FEATSET==='v2'?FEATS:FEATS.filter(F=>!F.v2);K=ACTIVE.length}
+// Welche Merkmalgruppen aktiv sind, entscheidet der wöchentliche Vergleich des Bots ('v1' = Basis, '+v2', '+fg', '+ob', '+cg')
+const GROUP_NAMES={v2:'erweitert',fg:'Fear & Greed',ob:'Orderbuch',cg:'CoinGecko'};
+let FEATSET='v1',GROUPS=new Set(),ACTIVE=FEATS.filter(F=>!F.g),K=ACTIVE.length;
+function setFeatSet(s){GROUPS=new Set(String(s||'v1').split('+').filter(x=>GROUP_NAMES[x]));
+  FEATSET=['v1',...Object.keys(GROUP_NAMES).filter(x=>GROUPS.has(x))].join('+').replace(/^v1\+v2/,'v2');
+  ACTIVE=FEATS.filter(F=>!F.g||GROUPS.has(F.g));K=ACTIVE.length}
+const featLabel=()=>['Basis',...Object.keys(GROUP_NAMES).filter(x=>GROUPS.has(x)).map(x=>GROUP_NAMES[x])].join(' + ');
 const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
@@ -371,10 +393,11 @@ function outcomeG(d,i,g){
 
 /* ---------- Lernen: logistische Regression ---------- */
 function fit(X,y,n,iters=160,K=ACTIVE.length){
-  const mu=new Float64Array(K),sd=new Float64Array(K);
-  for(let i=0;i<n;i++)for(let k=0;k<K;k++)mu[k]+=X[i*K+k];for(let k=0;k<K;k++)mu[k]/=n;
-  for(let i=0;i<n;i++)for(let k=0;k<K;k++)sd[k]+=(X[i*K+k]-mu[k])**2;for(let k=0;k<K;k++)sd[k]=Math.sqrt(sd[k]/n)||1;
-  const Z=new Float64Array(n*K);for(let i=0;i<n;i++)for(let k=0;k<K;k++)Z[i*K+k]=(X[i*K+k]-mu[k])/sd[k];
+  // Fehlende Werte (NaN, z. B. vor Beginn der Datensammlung) zählen als neutral
+  const mu=new Float64Array(K),sd=new Float64Array(K),cn=new Float64Array(K);
+  for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];if(v===v){mu[k]+=v;cn[k]++}}for(let k=0;k<K;k++)mu[k]=cn[k]?mu[k]/cn[k]:0;
+  for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];if(v===v)sd[k]+=(v-mu[k])**2}for(let k=0;k<K;k++)sd[k]=cn[k]?Math.sqrt(sd[k]/cn[k])||1:1;
+  const Z=new Float64Array(n*K);for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];Z[i*K+k]=v===v?(v-mu[k])/sd[k]:0}
   let base=0;for(let i=0;i<n;i++)base+=y[i];base=clip(base/n,.01,.99);
   const w=new Float64Array(K),g=new Float64Array(K);let b=Math.log(base/(1-base));const lr=.8,lam=2e-3;
   for(let it=0;it<iters;it++){g.fill(0);let gb=0;
@@ -382,8 +405,8 @@ function fit(X,y,n,iters=160,K=ACTIVE.length){
     b-=lr*gb/n;for(let k=0;k<K;k++)w[k]-=lr*(g[k]/n+lam*w[k]);}
   return{w:Array.from(w),b,mu:Array.from(mu),sd:Array.from(sd),base};
 }
-function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
-function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
+function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++){const v=x[k];if(v===v)s+=m.w[k]*(v-m.mu[k])/m.sd[k]}return 1/(1+Math.exp(-s))}
+function contrib(m,x){return x.map((v,k)=>v===v?m.w[k]*(v-m.mu[k])/m.sd[k]:0)}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
 async function trainModel(src=data,stride=1,minTs=0){
@@ -418,7 +441,7 @@ function calib(p){const a=model.allP;let lo=0,hi=a.length;while(lo<hi){const m=(
 function analyze(m,d){
   const N=d.c.length-1,last=d.c[N],x=feat(d,N),p=predict(model,x),cal=calib(p),ev=cal.r;
   const ct=contrib(model,x),reasons=[];
-  ACTIVE.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
+  ACTIVE.forEach((F,k)=>{if(x[k]!==x[k])return;const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
   reasons.sort((a,b)=>Math.abs(b[0])-Math.abs(a[0]));
   const lb=SRBARS[TF],sup=Math.min(...d.l.slice(-lb)),res=Math.max(...d.h.slice(-lb)),a=d.A[N];
   const R=riskOf(last,a),stop=last-R,t1=last+GEO.tp*R,t2=Math.max(res,last+(GEO.tp+1)*R);
@@ -445,7 +468,11 @@ async function loadMarkets(){
 }
 async function pool(items,n,fn){let i=0;await Promise.all(Array.from({length:n},async()=>{while(i<items.length){const it=items[i++];try{await fn(it)}catch(e){console.warn(it.market,e)}}}))}
 async function loadSide(){
-  try{const f=await j('https://api.alternative.me/fng/?limit=1');const d=f.data[0];$('#fng').textContent=d.value;$('#fngTxt').textContent=({'Extreme Fear':'Extreme Angst','Fear':'Angst','Neutral':'Neutral','Greed':'Gier','Extreme Greed':'Extreme Gier'})[d.value_classification]||d.value_classification}catch(e){$('#fngTxt').textContent='nicht erreichbar'}
+  try{const f=await j('https://api.alternative.me/fng/?limit=200');for(const x of f.data)EXT.fg.set(Math.floor(+x.timestamp*1000/DAYMS)*DAYMS,+x.value);const d=f.data[0];$('#fng').textContent=d.value;$('#fngTxt').textContent=({'Extreme Fear':'Extreme Angst','Fear':'Angst','Neutral':'Neutral','Greed':'Gier','Extreme Greed':'Extreme Gier'})[d.value_classification]||d.value_classification}catch(e){$('#fngTxt').textContent='nicht erreichbar'}
+  // Orderbuch und Marktdaten, die der Bot alle 5 Minuten erfasst
+  try{const L=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/live.json?'+Date.now()),h=L.stunde;
+    for(const [mk,o] of Object.entries(L.orderbuch||{}))EXT.ob.set(mk,new Map([[h,o]]));
+    if(L.stimmung){EXT.cg.set(h,{chg:L.stimmung.chg,dom:L.stimmung.dom,tr:new Set(L.trending||[])});if(L.stimmung.dom24!=null)EXT.cg.set(h-DAYMS,{dom:L.stimmung.dom24})}}catch(e){}
   try{const g=(await j(CG+'/global')).data;const v=g.market_cap_change_percentage_24h_usd;$('#glob').textContent=pct(v);$('#glob').className='v '+(v>=0?'up':'down');$('#dom').textContent='BTC-Dominanz '+g.market_cap_percentage.btc.toFixed(1)+'%'}catch(e){$('#dom').textContent='CoinGecko nicht erreichbar'}
   try{const tr=await j(CG+'/search/trending');trendingRaw=tr.coins.map(c=>c.item);trending=new Set(trendingRaw.map(c=>c.symbol.toUpperCase()))}catch(e){trendingRaw=[]}
 }
@@ -459,7 +486,7 @@ async function fetchCandles(m,full){
   const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${full?HIST:5}`)).slice().reverse();
   if(full||!raw[m.market])raw[m.market]=rows;
   else{const a=raw[m.market],lastTs=+a[a.length-1][0];rows.forEach(r=>{if(+r[0]===lastTs)a[a.length-1]=r;else if(+r[0]>lastTs)a.push(r)});if(a.length>HIST+50)a.splice(0,a.length-HIST)}
-  if(raw[m.market].length>=220)data[m.market]=prep(raw[m.market]);
+  if(raw[m.market].length>=220)data[m.market]=prep(raw[m.market],m.market);
 }
 async function run(force){
   if(loading)return;loading=true;
@@ -695,7 +722,7 @@ function renderMood(){
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
-  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${FEATSET==='v2'?'erweiterte Merkmale':'Basis-Merkmale'} (${K}) · ${m.bot?'vom Bot, '+Math.round((m.tage||365)/30.4)+' Monate':'in der App gelernt'} · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
+  $('#mTime').textContent=`trainiert ${new Date(m.trained).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · Merkmale: ${featLabel()} (${K}) · ${m.bot?'vom Bot, '+Math.round((m.tage||365)/30.4)+' Monate':'in der App gelernt'} · ${m.tf} · Daten ${f(m.from)}–${f(m.to)}`;
   const lift=m.top.win/m.baseWin;
   $('#mStats').innerHTML=`<div><span class="lbl">Gelernte Signale</span><b>${m.n.toLocaleString('de-CH')}</b></div>
    <div><span class="lbl">Trefferquote zufällig</span><b>${(m.baseWin*100).toFixed(0)}%</b></div>

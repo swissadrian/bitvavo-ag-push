@@ -59,6 +59,15 @@ Das Modell lernt aus 16 Basis-Merkmalen: EMA-Trend, RSI, MACD, Bollinger, Volume
 
 Einmal pro Woche vergleicht der Bot beide Varianten auf denselben unbekannten Testdaten aus dem gewählten Lernzeitraum, nach Gebühren. Die erweiterte Variante wird nur genutzt, wenn sie spürbar besser abschneidet (Ergebnisse in `analyse/merkmale.csv`). Die Radar-App übernimmt die Wahl automatisch.
 
+## Zusätzliche Daten: Orderbuch, Stimmung, CoinGecko
+
+Die Kurse im Logbuch sind eine Kopie dessen, was Bitvavo jederzeit wieder liefert. Für die Vorhersage bringen sie deshalb nichts Neues. Zusätzlich sammelt der Bot bei jedem Lauf Daten, die man später **nicht** mehr abrufen kann:
+
+- **Orderbuch** je Coin: Spread, Markttiefe ±1 % und ±2 % in Euro (Kauf- und Verkaufsseite), Ungleichgewicht zwischen Kauf- und Verkaufsaufträgen.
+- **Marktstimmung:** Fear & Greed, Gesamt-Marktkapitalisierung und ihre 24h-Veränderung, BTC- und ETH-Dominanz, die Trending-Liste von CoinGecko.
+
+Jede Woche prüft der Bot jede Merkmalgruppe einzeln: einmal mit, einmal ohne, auf denselben unbekannten Testdaten nach Gebühren. Eine Gruppe wird nur genutzt, wenn sie die Vorhersage spürbar verbessert. Fear & Greed gibt es rückwirkend seit 2018, das wird sofort geprüft. Orderbuch und CoinGecko werden ab 90 gesammelten Tagen geprüft. Bis dahin steht in `analyse/merkmale.csv` «wartet (x/90 Tage)».
+
 ## Logbuch
 
 Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten). Zeiten in UTC. Je älter die Daten, desto gröber werden sie gespeichert:
@@ -72,11 +81,13 @@ Alles liegt im Branch **logs** (oben links von «main» auf «logs» umschalten)
 | 1 bis 3 Jahre | 24 Stunden · `kurse/24h/` | 24 Stunden · `signale/24h/` |
 | älter als 3 Jahre | gelöscht | gelöscht |
 
+Orderbuch (`orderbuch/`) und Stimmung (`stimmung/`) werden wie die Signale gespeichert: jeder Lauf bis 30 Tage, dann stündlich bis 1 Jahr, dann täglich bis 3 Jahre.
+
 Dazu kommen `laeufe/` mit einer Zusammenfassung pro Lauf und `meldungen/` mit den gesendeten Kauf-Signalen. Beides wird nach 3 Jahren gelöscht.
 
 Die neuesten Daten liegen in Stundendateien (`JJJJ-MM-TT-HH.csv`), ältere in gepackten Tagesdateien (`.csv.gz`). Die 1-Minuten-Werte stammen direkt von Bitvavo und sind deshalb lückenlos, obwohl der Bot nur etwa alle 5 Minuten läuft. Der Branch wird jedes Mal als einzelner Commit ohne Verlauf gespeichert, sodass gelöschte Daten wirklich keinen Platz mehr belegen.
 
-**Platz:** rund 1,6 MB pro Markt, und das bleibt stabil, weil Altes laufend verdichtet und gelöscht wird. Bei 150 Märkten sind das etwa 250 MB, bei 250 Märkten etwa 400 MB. GitHub empfiehlt Repositories unter 1 GB. Die Anzahl Märkte steht in `laeufe/` (Spalte `maerkte`).
+**Platz:** rund 2 MB pro Markt (inklusive Orderbuch), und das bleibt stabil, weil Altes laufend verdichtet und gelöscht wird. Bei 150 Märkten sind das etwa 250 MB, bei 250 Märkten etwa 400 MB. GitHub empfiehlt Repositories unter 1 GB. Die Anzahl Märkte steht in `laeufe/` (Spalte `maerkte`).
 
 Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil das Repository öffentlich ist.
 

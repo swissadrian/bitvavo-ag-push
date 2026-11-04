@@ -24,6 +24,7 @@ const HIST=1000, RETRAIN_MS=30*60e3;
 
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
 const fmtP=v=>{if(v==null||isNaN(v))return'–';const a=Math.abs(v);const d=a>=1000?2:a>=1?3:a>=0.01?5:8;return v.toLocaleString('de-CH',{minimumFractionDigits:Math.min(d,2),maximumFractionDigits:d})};
+const fmtV=v=>v>=1e6?(v/1e6).toFixed(v>=1e7?0:1)+'M':(v/1e3).toFixed(0)+'K';
 const pct=v=>(v>0?'+':'')+v.toFixed(2)+'%';
 const fmtR=v=>(v>0?'+':'')+v.toFixed(2)+' R';
 /* ---------- Indikatoren ---------- */
@@ -42,7 +43,12 @@ function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.l
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
 function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
-function prep(cand){
+// Zusätzliche Daten, die Bitvavo-Kerzen nicht enthalten: Fear & Greed (Tag), Orderbuch je Markt (Stunde), CoinGecko-Marktdaten (Stunde)
+const EXT={fg:new Map(),ob:new Map(),cg:new Map()},HOUR=36e5,DAYMS=864e5;
+function fgAt(ts){const v=EXT.fg.get(Math.floor(ts/DAYMS)*DAYMS);return v==null?null:v}
+function obAt(mk,ts){const m=EXT.ob.get(mk);if(!m)return null;const h=Math.floor(ts/HOUR)*HOUR;return m.get(h)||m.get(h-HOUR)||m.get(h-2*HOUR)||null}
+function cgAt(ts){const h=Math.floor(ts/HOUR)*HOUR;return EXT.cg.get(h)||EXT.cg.get(h-HOUR)||EXT.cg.get(h-2*HOUR)||null}
+function prep(cand,mk=''){
   const ts=cand.map(x=>+x[0]),o=cand.map(x=>+x[1]),h=cand.map(x=>+x[2]),l=cand.map(x=>+x[3]),c=cand.map(x=>+x[4]),v=cand.map(x=>+x[5]);
   const e12=ema(c,12),e26=ema(c,26),mm=c.map((_,i)=>e12[i]-e26[i]),ms=ema(mm,9),mh=mm.map((x,i)=>x-ms[i]);
   const B=boll(c),bw=B.map((b,i)=>b?(b.u-b.l)/b.m:null),vr=v.map((x,i)=>{if(i<20)return 1;let s=0;for(let k=i-20;k<i;k++)s+=v[k];return x/((s/20)||1e-9)});
@@ -50,7 +56,7 @@ function prep(cand){
   const vw=c.map((_,i)=>{const a=Math.max(0,i-D+1),sv=pv[i+1]-pv[a];return sv>0?(pp[i+1]-pp[a])/sv:c[i]});          // VWAP der letzten 24h
   const rv=c.map((_,i)=>{if(i<8*D)return 1;const v24=pv[i+1]-pv[i+1-D],v7=(pv[i+1-D]-pv[i+1-8*D])/7;return v24/(v7||1e-9)}); // 24h-Volumen ggü. Schnitt der 7 Tage davor
   const AX=adx(h,l,c);
-  return{ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr,vw,rv,adx:AX.X,pdi:AX.P,mdi:AX.M,hi24:priorMax(h,D),hi7:priorMax(h,7*D)};
+  return{mk,ts,o,h,l,c,v,e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),R:rsi(c),mh,B,bw,A:atr(h,l,c),vr,vw,rv,adx:AX.X,pdi:AX.P,mdi:AX.M,hi24:priorMax(h,D),hi7:priorMax(h,7*D)};
 }
 
 /* ---------- Merkmale, aus denen das Modell lernt ---------- */
@@ -73,24 +79,41 @@ const FEATS=[
  {n:'Abstand zu EMA 50',num:1,f:(d,i)=>clip((d.c[i]-d.e50[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' EMA 50'},
 
  // Erweiterung v2: VWAP, ADX, relatives Volumen, Ausbrüche, Bitcoin-Marktlage, Tageszeit, Kombinationen
- {v2:1,n:'Abstand zum 24h-VWAP',num:1,f:(d,i)=>clip((d.c[i]-d.vw[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' dem 24h-VWAP'},
- {v2:1,n:'Trendstärke (ADX)',num:1,f:(d,i)=>clip(d.adx[i]/50,0,1.5),t:v=>'ADX '+(v*50).toFixed(0)+': '+(v*50>=25?'kräftiger Trend':'kaum Trend')},
- {v2:1,n:'ADX-Richtung',f:(d,i)=>d.adx[i]>=25?(d.pdi[i]>d.mdi[i]?1:-1):0,t:v=>v>0?'Starker Trend nach oben (ADX ≥ 25, +DI vorne)':'Starker Trend nach unten (ADX ≥ 25, −DI vorne)'},
- {v2:1,n:'Relatives Volumen 24h/7T',num:1,f:(d,i)=>clip(Math.log2(d.rv[i]||1),-2,3),t:v=>'Volumen 24h '+(2**v).toFixed(1)+'× der Vorwoche'},
- {v2:1,n:'Abstand zum 24h-Hoch',num:1,f:(d,i)=>d.hi24[i]==null?0:clip((d.c[i]-d.hi24[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>v>=0?'Über dem 24h-Hoch':'Kurs '+Math.abs(v*3).toFixed(1)+' ATR unter dem 24h-Hoch'},
- {v2:1,n:'Ausbruch über 7-Tage-Hoch',f:(d,i)=>d.hi7[i]!=null&&d.c[i]>d.hi7[i]?1:0,t:()=>'Ausbruch über das 7-Tage-Hoch'},
- {v2:1,n:'Bitcoin 24h',num:1,f:(d,i)=>clip(((BTCX.get(d.ts[i])||[0])[0])*10,-1.5,1.5),t:v=>'Bitcoin 24h '+pct(v*10)},
- {v2:1,n:'Bitcoin-Trend',f:(d,i)=>(BTCX.get(d.ts[i])||[0,0])[1],t:v=>v>0?'Bitcoin über EMA 50 (Rückenwind)':'Bitcoin unter EMA 50 (Gegenwind)'},
- {v2:1,n:'Session Europa (7–13 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=7&&h<13?1:0},t:()=>'Europa-Session'},
- {v2:1,n:'Session USA (13–21 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=13&&h<21?1:0},t:()=>'US-Session'},
- {v2:1,n:'Session spät (21–24 UTC)',f:(d,i)=>new Date(d.ts[i]).getUTCHours()>=21?1:0,t:()=>'Späte Session'},
- {v2:1,n:'RSI tief im Aufwärtstrend',f:(d,i)=>d.R[i]<40&&d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]?1:0,t:(v,d,i)=>'Rücksetzer im Aufwärtstrend (RSI '+d.R[i].toFixed(0)+')'},
- {v2:1,n:'Ausbruch mit Volumen',f:(d,i)=>d.hi24[i]!=null&&d.c[i]>d.hi24[i]&&d.vr[i]>1.5?1:0,t:(v,d,i)=>'Ausbruch über das 24h-Hoch mit '+d.vr[i].toFixed(1)+'× Volumen'},
- {v2:1,n:'Coin und Bitcoin im Aufwärtstrend',f:(d,i)=>d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]&&(BTCX.get(d.ts[i])||[0,0])[1]>0?1:0,t:()=>'Coin und Bitcoin beide im Aufwärtstrend'},
+ {g:'v2',n:'Abstand zum 24h-VWAP',num:1,f:(d,i)=>clip((d.c[i]-d.vw[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>'Kurs '+Math.abs(v*3).toFixed(1)+' ATR '+(v>0?'über':'unter')+' dem 24h-VWAP'},
+ {g:'v2',n:'Trendstärke (ADX)',num:1,f:(d,i)=>clip(d.adx[i]/50,0,1.5),t:v=>'ADX '+(v*50).toFixed(0)+': '+(v*50>=25?'kräftiger Trend':'kaum Trend')},
+ {g:'v2',n:'ADX-Richtung',f:(d,i)=>d.adx[i]>=25?(d.pdi[i]>d.mdi[i]?1:-1):0,t:v=>v>0?'Starker Trend nach oben (ADX ≥ 25, +DI vorne)':'Starker Trend nach unten (ADX ≥ 25, −DI vorne)'},
+ {g:'v2',n:'Relatives Volumen 24h/7T',num:1,f:(d,i)=>clip(Math.log2(d.rv[i]||1),-2,3),t:v=>'Volumen 24h '+(2**v).toFixed(1)+'× der Vorwoche'},
+ {g:'v2',n:'Abstand zum 24h-Hoch',num:1,f:(d,i)=>d.hi24[i]==null?0:clip((d.c[i]-d.hi24[i])/(d.A[i]||1e-9)/3,-1,1),t:v=>v>=0?'Über dem 24h-Hoch':'Kurs '+Math.abs(v*3).toFixed(1)+' ATR unter dem 24h-Hoch'},
+ {g:'v2',n:'Ausbruch über 7-Tage-Hoch',f:(d,i)=>d.hi7[i]!=null&&d.c[i]>d.hi7[i]?1:0,t:()=>'Ausbruch über das 7-Tage-Hoch'},
+ {g:'v2',n:'Bitcoin 24h',num:1,f:(d,i)=>clip(((BTCX.get(d.ts[i])||[0])[0])*10,-1.5,1.5),t:v=>'Bitcoin 24h '+pct(v*10)},
+ {g:'v2',n:'Bitcoin-Trend',f:(d,i)=>(BTCX.get(d.ts[i])||[0,0])[1],t:v=>v>0?'Bitcoin über EMA 50 (Rückenwind)':'Bitcoin unter EMA 50 (Gegenwind)'},
+ {g:'v2',n:'Session Europa (7–13 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=7&&h<13?1:0},t:()=>'Europa-Session'},
+ {g:'v2',n:'Session USA (13–21 UTC)',f:(d,i)=>{const h=new Date(d.ts[i]).getUTCHours();return h>=13&&h<21?1:0},t:()=>'US-Session'},
+ {g:'v2',n:'Session spät (21–24 UTC)',f:(d,i)=>new Date(d.ts[i]).getUTCHours()>=21?1:0,t:()=>'Späte Session'},
+ {g:'v2',n:'RSI tief im Aufwärtstrend',f:(d,i)=>d.R[i]<40&&d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]?1:0,t:(v,d,i)=>'Rücksetzer im Aufwärtstrend (RSI '+d.R[i].toFixed(0)+')'},
+ {g:'v2',n:'Ausbruch mit Volumen',f:(d,i)=>d.hi24[i]!=null&&d.c[i]>d.hi24[i]&&d.vr[i]>1.5?1:0,t:(v,d,i)=>'Ausbruch über das 24h-Hoch mit '+d.vr[i].toFixed(1)+'× Volumen'},
+ {g:'v2',n:'Coin und Bitcoin im Aufwärtstrend',f:(d,i)=>d.c[i]>d.e50[i]&&d.e20[i]>d.e50[i]&&(BTCX.get(d.ts[i])||[0,0])[1]>0?1:0,t:()=>'Coin und Bitcoin beide im Aufwärtstrend'},
+
+ // Stimmung (Fear & Greed, rückwirkend verfügbar)
+ {g:'fg',n:'Fear & Greed',num:1,f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:(v-50)/25},t:v=>'Fear & Greed '+Math.round(v*25+50)},
+ {g:'fg',n:'Fear & Greed 7 Tage',num:1,f:(d,i)=>{const a=fgAt(d.ts[i]),b=fgAt(d.ts[i]-7*DAYMS);return a==null||b==null?NaN:clip((a-b)/20,-2,2)},t:v=>'Fear & Greed '+(v>0?'+':'')+Math.round(v*20)+' Punkte in 7 Tagen'},
+ {g:'fg',n:'Extreme Angst (F&G < 25)',f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:v<25?1:0},t:()=>'Extreme Angst am Markt'},
+ // Orderbuch (wird vom Bot gesammelt)
+ {g:'ob',n:'Spread',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.spread+0.01)+1,-1,3):NaN},t:v=>'Spread '+(10**(v-1)-0.01).toFixed(2)+' %'},
+ {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' €'},
+ {g:'ob',n:'Orderbuch-Ungleichgewicht',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?o.imb:NaN},t:v=>v>0?'Mehr Kauf- als Verkaufsaufträge nahe am Kurs':'Mehr Verkaufs- als Kaufaufträge nahe am Kurs'},
+ // CoinGecko-Marktdaten (werden vom Bot gesammelt)
+ {g:'cg',n:'Gesamtmarkt 24h',num:1,f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.chg!=null?clip(c.chg/5,-2,2):NaN},t:v=>'Krypto-Gesamtmarkt 24h '+pct(v*5)},
+ {g:'cg',n:'BTC-Dominanz 24h',num:1,f:(d,i)=>{const a=cgAt(d.ts[i]),b=cgAt(d.ts[i]-DAYMS);return a&&b&&a.dom!=null&&b.dom!=null?clip(a.dom-b.dom,-2,2):NaN},t:v=>'BTC-Dominanz '+(v>0?'+':'')+v.toFixed(2)+' Prozentpunkte in 24h'},
+ {g:'cg',n:'Trending auf CoinGecko',f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.tr?(c.tr.has(d.mk.split('-')[0])?1:0):NaN},t:()=>'Trending auf CoinGecko'},
 ];
-// Welche Merkmale aktiv sind, entscheidet der wöchentliche Vergleich des Bots (v1 = bisher, v2 = erweitert)
-let FEATSET='v1',ACTIVE=FEATS.filter(F=>!F.v2),K=ACTIVE.length;
-function setFeatSet(s){FEATSET=s==='v2'?'v2':'v1';ACTIVE=FEATSET==='v2'?FEATS:FEATS.filter(F=>!F.v2);K=ACTIVE.length}
+// Welche Merkmalgruppen aktiv sind, entscheidet der wöchentliche Vergleich des Bots ('v1' = Basis, '+v2', '+fg', '+ob', '+cg')
+const GROUP_NAMES={v2:'erweitert',fg:'Fear & Greed',ob:'Orderbuch',cg:'CoinGecko'};
+let FEATSET='v1',GROUPS=new Set(),ACTIVE=FEATS.filter(F=>!F.g),K=ACTIVE.length;
+function setFeatSet(s){GROUPS=new Set(String(s||'v1').split('+').filter(x=>GROUP_NAMES[x]));
+  FEATSET=['v1',...Object.keys(GROUP_NAMES).filter(x=>GROUPS.has(x))].join('+').replace(/^v1\+v2/,'v2');
+  ACTIVE=FEATS.filter(F=>!F.g||GROUPS.has(F.g));K=ACTIVE.length}
+const featLabel=()=>['Basis',...Object.keys(GROUP_NAMES).filter(x=>GROUPS.has(x)).map(x=>GROUP_NAMES[x])].join(' + ');
 const feat=(d,i)=>ACTIVE.map(F=>F.f(d,i));
 
 /* Ergebnis eines Kaufs bei Kerze i: Ziel vor Stop? */
@@ -106,10 +129,11 @@ function outcomeG(d,i,g){
 
 /* ---------- Lernen: logistische Regression ---------- */
 function fit(X,y,n,iters=160,K=ACTIVE.length){
-  const mu=new Float64Array(K),sd=new Float64Array(K);
-  for(let i=0;i<n;i++)for(let k=0;k<K;k++)mu[k]+=X[i*K+k];for(let k=0;k<K;k++)mu[k]/=n;
-  for(let i=0;i<n;i++)for(let k=0;k<K;k++)sd[k]+=(X[i*K+k]-mu[k])**2;for(let k=0;k<K;k++)sd[k]=Math.sqrt(sd[k]/n)||1;
-  const Z=new Float64Array(n*K);for(let i=0;i<n;i++)for(let k=0;k<K;k++)Z[i*K+k]=(X[i*K+k]-mu[k])/sd[k];
+  // Fehlende Werte (NaN, z. B. vor Beginn der Datensammlung) zählen als neutral
+  const mu=new Float64Array(K),sd=new Float64Array(K),cn=new Float64Array(K);
+  for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];if(v===v){mu[k]+=v;cn[k]++}}for(let k=0;k<K;k++)mu[k]=cn[k]?mu[k]/cn[k]:0;
+  for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];if(v===v)sd[k]+=(v-mu[k])**2}for(let k=0;k<K;k++)sd[k]=cn[k]?Math.sqrt(sd[k]/cn[k])||1:1;
+  const Z=new Float64Array(n*K);for(let i=0;i<n;i++)for(let k=0;k<K;k++){const v=X[i*K+k];Z[i*K+k]=v===v?(v-mu[k])/sd[k]:0}
   let base=0;for(let i=0;i<n;i++)base+=y[i];base=clip(base/n,.01,.99);
   const w=new Float64Array(K),g=new Float64Array(K);let b=Math.log(base/(1-base));const lr=.8,lam=2e-3;
   for(let it=0;it<iters;it++){g.fill(0);let gb=0;
@@ -117,8 +141,8 @@ function fit(X,y,n,iters=160,K=ACTIVE.length){
     b-=lr*gb/n;for(let k=0;k<K;k++)w[k]-=lr*(g[k]/n+lam*w[k]);}
   return{w:Array.from(w),b,mu:Array.from(mu),sd:Array.from(sd),base};
 }
-function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++)s+=m.w[k]*(x[k]-m.mu[k])/m.sd[k];return 1/(1+Math.exp(-s))}
-function contrib(m,x){return x.map((v,k)=>m.w[k]*(v-m.mu[k])/m.sd[k])}
+function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++){const v=x[k];if(v===v)s+=m.w[k]*(v-m.mu[k])/m.sd[k]}return 1/(1+Math.exp(-s))}
+function contrib(m,x){return x.map((v,k)=>v===v?m.w[k]*(v-m.mu[k])/m.sd[k]:0)}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
 async function trainModel(src=data,stride=1,minTs=0){
@@ -153,7 +177,7 @@ function calib(p){const a=model.allP;let lo=0,hi=a.length;while(lo<hi){const m=(
 function analyze(m,d){
   const N=d.c.length-1,last=d.c[N],x=feat(d,N),p=predict(model,x),cal=calib(p),ev=cal.r;
   const ct=contrib(model,x),reasons=[];
-  ACTIVE.forEach((F,k)=>{const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
+  ACTIVE.forEach((F,k)=>{if(x[k]!==x[k])return;const active=F.num?Math.abs(ct[k])>.04:x[k]!==0;if(active)reasons.push([ct[k],F.t(x[k],d,N)])});
   reasons.sort((a,b)=>Math.abs(b[0])-Math.abs(a[0]));
   const lb=SRBARS[TF],sup=Math.min(...d.l.slice(-lb)),res=Math.max(...d.h.slice(-lb)),a=d.A[N];
   const R=riskOf(last,a),stop=last-R,t1=last+GEO.tp*R,t2=Math.max(res,last+(GEO.tp+1)*R);
@@ -198,7 +222,7 @@ async function j(url,tries=4){
       const rem=+(r.headers?.get?.('bitvavo-ratelimit-remaining')??NaN),reset=+(r.headers?.get?.('bitvavo-ratelimit-resetat')??NaN);
       if(Number.isFinite(rem)&&rem<150){const w=Math.min(65e3,Math.max(1e3,(Number.isFinite(reset)?reset-Date.now():30e3)+500));console.log(`Bitvavo-Limit fast erreicht (${rem} übrig), pausiere ${(w/1e3).toFixed(0)} s`);bvNext=Math.max(bvNext,Date.now()+w)}
       if(r.ok)return r.json();
-      if(r.status===429){bvNext=Math.max(bvNext,Date.now()+20e3);continue}
+      if(r.status===429){if(url.startsWith(API))bvNext=Math.max(bvNext,Date.now()+20e3);else await sleep(5e3);continue}
       if(r.status<500){const e=new Error(url.split('?')[0]+' → '+r.status);e.fatal=true;throw e}}
     catch(e){if(e.fatal||t===tries-1)throw e}
     await sleep(1500*(t+1))}
@@ -253,6 +277,8 @@ function advice(mk,p,last){
 const TIERS={
   kurse:[{res:1,dir:'kurse/1m',days:30},{res:5,dir:'kurse/5m',days:91},{res:30,dir:'kurse/30m',days:182},{res:60,dir:'kurse/1h',days:365},{res:1440,dir:'kurse/24h',days:1095}],
   signale:[{res:0,dir:'signale/lauf',days:30},{res:60,dir:'signale/1h',days:365},{res:1440,dir:'signale/24h',days:1095}],
+  orderbuch:[{res:0,dir:'orderbuch/lauf',days:30},{res:60,dir:'orderbuch/1h',days:365},{res:1440,dir:'orderbuch/24h',days:1095}],
+  stimmung:[{res:0,dir:'stimmung/lauf',days:30},{res:60,dir:'stimmung/1h',days:365},{res:1440,dir:'stimmung/24h',days:1095}],
 };
 const iso=ts=>new Date(ts).toISOString().slice(0,16).replace('T',' ');
 const dayOf=ts=>new Date(ts).toISOString().slice(0,10);
@@ -301,6 +327,53 @@ async function repair1m(){
     if(fs.existsSync(csv)){const x=readCsv(csv);mergeGz(gz,HK.join(','),[...x.rows,...byFile[f]]);fs.unlinkSync(csv)}else mergeGz(gz,HK.join(','),byFile[f])}
   st.repair1m=REPAIR_V;console.log(`Reparatur: ${n} 1-Minuten-Werte seit 03.11. 19:00 UTC nachgeladen und eingefügt.`);
 }
+/* ---------- Zusätzliche Daten erfassen, die man später nicht mehr abrufen kann ---------- */
+const HO=['zeit_utc','markt','bid','ask','spread_pct','tiefe_1pct_kauf_eur','tiefe_1pct_verkauf_eur','tiefe_2pct_kauf_eur','tiefe_2pct_verkauf_eur','ungleichgewicht_1pct'];
+const HST=['zeit_utc','markt','fear_greed','fear_greed_text','marktkap_eur','marktkap_24h_pct','btc_dominanz','eth_dominanz','trending'];
+const hourKey=t=>Math.floor(t/HOUR)*HOUR;
+async function logExt(){
+  const now=Date.now(),t=iso(now),h=hourKey(now),live={zeit:new Date(now).toISOString(),stunde:h,orderbuch:{},stimmung:null,trending:[]};
+  // Stimmung: Fear & Greed (mit Verlauf der letzten 60 Tage), CoinGecko global und Trending
+  let fg=null,fgTxt='',g=null,tr=null;
+  try{const f=await j('https://api.alternative.me/fng/?limit=60',2);for(const x of f.data)EXT.fg.set(Math.floor(+x.timestamp*1000/DAYMS)*DAYMS,+x.value);fg=+f.data[0].value;fgTxt=f.data[0].value_classification}catch(e){console.warn('Fear & Greed:',e.message)}
+  try{g=(await j(CG+'/global',2)).data}catch(e){console.warn('CoinGecko global:',e.message)}
+  try{tr=(await j(CG+'/search/trending',2)).coins.map(c=>String(c.item.symbol).toUpperCase())}catch(e){console.warn('CoinGecko Trending:',e.message)}
+  const chg=g?.market_cap_change_percentage_24h_usd,dom=g?.market_cap_percentage?.btc;
+  if(g||tr||fg!=null){
+    appendCsv(hourFile(TIERS.stimmung[0].dir,now),HST,[[t,'GESAMT',fg??'',fgTxt,g?Math.round(g.total_market_cap?.eur||0):'',chg!=null?chg.toFixed(3):'',dom!=null?dom.toFixed(3):'',g?.market_cap_percentage?.eth!=null?g.market_cap_percentage.eth.toFixed(3):'',(tr||[]).join(' ')]]);
+    loadExtLog(['stimmung'],now-26*HOUR);                                   // für die 24h-Änderung der Dominanz
+    EXT.cg.set(h,{chg:chg??null,dom:dom??null,tr:tr?new Set(tr):null});
+    const d24=cgAt(now-DAYMS);live.stimmung={fng:fg,chg:chg??null,dom:dom??null,dom24:d24?.dom??null};live.trending=tr||[];
+  }
+  // Orderbuch je Markt: Spread, Markttiefe ±1 % und ±2 %, Ungleichgewicht
+  const rows=[];
+  await pool(markets.filter(eligible),5,async m=>{
+    const b=await j(`${API}/${m.market}/book?depth=200`);
+    const bids=(b.bids||[]).map(x=>[+x[0],+x[1]]),asks=(b.asks||[]).map(x=>[+x[0],+x[1]]);if(!bids.length||!asks.length)return;
+    const bid=bids[0][0],ask=asks[0][0],mid=(bid+ask)/2,dep=(arr,lo,hi)=>arr.reduce((s,[p,a])=>p>=lo&&p<=hi?s+p*a:s,0);
+    const b1=dep(bids,mid*.99,Infinity),a1=dep(asks,0,mid*1.01),b2=dep(bids,mid*.98,Infinity),a2=dep(asks,0,mid*1.02);
+    const o={spread:(ask-bid)/mid*100,b1,a1,b2,a2,imb:b1+a1>0?(b1-a1)/(b1+a1):0};
+    EXT.ob.set(m.market,new Map([[h,o]]));live.orderbuch[m.market]={spread:+o.spread.toFixed(4),b2:Math.round(b2),a2:Math.round(a2),imb:+o.imb.toFixed(3)};
+    rows.push([t,m.market,bid,ask,o.spread.toFixed(4),Math.round(b1),Math.round(a1),Math.round(b2),Math.round(a2),o.imb.toFixed(3)]);
+  });
+  rows.sort((a,b)=>a[1]<b[1]?-1:1);appendCsv(hourFile(TIERS.orderbuch[0].dir,now),HO,rows);
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/live.json',JSON.stringify(live));
+  console.log(`Zusatzdaten: Orderbuch ${rows.length} Märkte, Fear & Greed ${fg??'–'}, CoinGecko ${g?'ok':'–'}/${tr?'ok':'–'}`);
+}
+// Gesammelte Orderbuch- und Stimmungsdaten aus dem Logbuch einlesen (ein Wert je Stunde; ältere Tageswerte gelten für den ganzen Tag)
+function loadExtLog(kinds=['orderbuch','stimmung'],since=0){
+  for(const kind of kinds)for(const tier of TIERS[kind])for(const f of files(`${LOG}/${tier.dir}`)){
+    const day=(path.basename(f).match(/^(\d{4}-\d{2}-\d{2})/)||[])[1];if(!day||Date.parse(day+'T00:00:00Z')+2*DAYMS<since)continue;
+    const {rows}=readCsv(f);
+    for(const l of rows){const c=l.split(',');const t0=Date.parse(c[0].replace(' ','T')+':00Z');if(!(t0>=since))continue;
+      const hs=tier.res>=1440?Array.from({length:24},(_,k)=>hourKey(t0)+k*HOUR):[hourKey(t0)];
+      if(kind==='orderbuch'){let m=EXT.ob.get(c[1]);if(!m)EXT.ob.set(c[1],m=new Map());const o={spread:+c[4],b1:+c[5],a1:+c[6],b2:+c[7],a2:+c[8],imb:+c[9]};for(const x of hs)if(!m.has(x))m.set(x,o)}
+      else{const o={chg:c[5]===''?null:+c[5],dom:c[6]===''?null:+c[6],tr:c.length>8&&c[8]!==''?new Set(c[8].split(' ')):null};for(const x of hs)if(!EXT.cg.has(x))EXT.cg.set(x,o)}}
+  }
+}
+// Fear & Greed seit 2018 (für Training und Vergleich)
+async function loadFgHistory(){try{const f=await j('https://api.alternative.me/fng/?limit=0',3);for(const x of f.data)EXT.fg.set(Math.floor(+x.timestamp*1000/DAYMS)*DAYMS,+x.value);console.log(`Fear & Greed: ${f.data.length} Tage Verlauf`)}catch(e){console.warn('Fear-&-Greed-Verlauf:',e.message)}}
+
 function logRun(buys){
   const now=Date.now(),t=iso(now),mon=t.slice(0,7),all=Object.values(results);
   appendCsv(hourFile(TIERS.signale[0].dir,now),HS,markets.filter(m=>results[m.market]&&eligible(m)).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),Math.round(m.vol3d),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
@@ -317,10 +390,10 @@ const nfmt=v=>String(+(+v).toPrecision(10));
 function aggregate(kind,rows,res){
   const out=new Map();
   for(const r of rows.slice().sort()){const c=r.split(','),k=bucket(c[0],res)+'|'+c[1],x=out.get(k);
-    if(kind==='signale'){if(!x)out.set(k,[bucket(c[0],res),...c.slice(1)]);continue}
+    if(kind!=='kurse'){if(!x)out.set(k,[bucket(c[0],res),...c.slice(1)]);continue}
     if(!x)out.set(k,[bucket(c[0],res),c[1],+c[2],+c[3],+c[4],+c[5],+c[6]]);
     else{x[3]=Math.max(x[3],+c[3]);x[4]=Math.min(x[4],+c[4]);x[5]=+c[5];x[6]+=+c[6]}}
-  return [...out.values()].map(x=>kind==='signale'?x.join(','):[x[0],x[1],...x.slice(2).map(nfmt)].join(','));
+  return [...out.values()].map(x=>kind!=='kurse'?x.join(','):[x[0],x[1],...x.slice(2).map(nfmt)].join(','));
 }
 function writeDay(dir,day,h,rows){
   const f=`${LOG}/${dir}/${day.slice(0,4)}/${day}.csv.gz`;fs.mkdirSync(path.dirname(f),{recursive:true});
@@ -390,11 +463,11 @@ async function longTrain(){
   const t0=Date.now(),c0=bvCount;st.longTryAt=t0;
   const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
   const hist={};let bars=0;
-  await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300){hist[mk]=prep(rows);bars+=rows.length}});
+  await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300){hist[mk]=prep(rows,mk);bars+=rows.length}});
   const mk=Object.keys(hist).length;
   console.log(`Langzeitverlauf: ${mk} Märkte, ${bars.toLocaleString('de-CH')} Kerzen (bis ${HIST_MAX} Tage), ${bvCount-c0} Abfragen, ${((Date.now()-t0)/1e3).toFixed(0)} s.`);
   if(!hist['BTC-EUR']||mk<10)throw new Error('Langzeitverlauf unvollständig');
-  setBtc(hist);
+  setBtc(hist);await loadFgHistory();loadExtLog();
   if(!st.winAt||Date.now()-st.winAt>7*DAY_MS)await windowAB(hist);
   const minTs=Date.now()-winDays()*DAY_MS;let inWin=0;for(const d of Object.values(hist))for(const t of d.ts)if(t>=minTs)inWin++;
   if(!st.geoAt||Date.now()-st.geoAt>7*DAY_MS)await geoAnalysis(hist,minTs);
@@ -497,28 +570,47 @@ function retro(){
   console.log(`Rückblick: ${rows.length} Coins mit ±10 % in 24h ausgewertet.`);
 }
 
-/* ---------- Bisherige gegen erweiterte Merkmale: wöchentlicher Vergleich auf unbekannten Testdaten ---------- */
+/* ---------- Merkmalgruppen: wöchentlich prüfen, ob sie die Vorhersage verbessern ---------- */
+// Jede Gruppe wird mit und ohne getestet (übrige Auswahl gleich). Gesammelte Daten (Orderbuch, CoinGecko) erst ab 90 Tagen.
+function coverageDays(g,now){
+  if(g==='v2')return Infinity;let lo=Infinity;
+  if(g==='fg')for(const t of EXT.fg.keys())lo=Math.min(lo,t);
+  if(g==='ob')for(const m of EXT.ob.values())for(const t of m.keys())lo=Math.min(lo,t);
+  if(g==='cg')for(const t of EXT.cg.keys())lo=Math.min(lo,t);
+  return lo===Infinity?0:(now-lo)/DAY_MS;
+}
 async function featureAB(src=data,minTs=0){
-  const t0=Date.now();setFeatSet('v2');
-  const all=FEATS.length,v1=FEATS.map((F,k)=>F.v2?-1:k).filter(k=>k>=0),S=[],hb=horBars(),D=Object.values(src);let cnt=0;for(const d of D)for(const t of d.ts)if(t>=minTs)cnt++;
-  const stride=Math.max(1,Math.round(cnt/400000));
+  const t0=Date.now(),now=t0,hb=horBars(),gap=hb*TFH[TF]*36e5,D=Object.values(src);
+  const cur=new Set(String(st.featSet||'v1').split('+').filter(x=>GROUP_NAMES[x]));
+  setFeatSet('v2+fg+ob+cg');const ALL=ACTIVE.slice();
+  let cnt=0;for(const d of D)for(const t of d.ts)if(t>=minTs)cnt++;
+  const stride=Math.max(1,Math.round(cnt/400000)),S=[];
   for(const d of D)for(let i=210;i<d.c.length-hb;i+=stride)if(d.A[i]&&d.ts[i]>=minTs){const o=outcome(d,i);S.push({ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}
   if(S.length<2000){setFeatSet(st.featSet||'v1');return console.log('Zu wenig Daten für den Merkmal-Vergleich.')}
-  S.sort((a,b)=>a.ts-b.ts);const n=S.length,cut=Math.floor(n*.75);
-  const score=cols=>{const k=cols.length,X=new Float64Array(n*k),Y=new Float64Array(n);
-    S.forEach((s,i)=>{cols.forEach((c,j)=>X[i*k+j]=s.x[c]);Y[i]=s.y});
-    const m=fit(X,Y,cut,120,k),t=[];for(let i=cut;i<n;i++)t.push([predict(m,cols.map(c=>S[i].x[c])),S[i].r,S[i].y]);t.sort((a,b)=>b[0]-a[0]);
+  const score=(cols,testFrom)=>{const tr=S.filter(s=>s.ts<testFrom-gap),te=S.filter(s=>s.ts>=testFrom),k=cols.length,n=tr.length;
+    const X=new Float64Array(n*k),Y=new Float64Array(n);tr.forEach((s,i)=>{cols.forEach((c,j)=>X[i*k+j]=s.x[c]);Y[i]=s.y});
+    const m=fit(X,Y,n,120,k),t=te.map(s=>[predict(m,cols.map(c=>s.x[c])),s.r,s.y]).sort((a,b)=>b[0]-a[0]);
     const top=f=>{const q=t.slice(0,Math.max(1,Math.floor(t.length*f)));return{r:q.reduce((s,x)=>s+x[1],0)/q.length,w:q.reduce((s,x)=>s+x[2],0)/q.length}};
-    const a=top(.1),b=top(.2);return{top10_r:a.r,top10_win:a.w,top20_r:b.r,score:(a.r+b.r)/2}};
-  const A=score(v1),B=score(FEATS.map((_,k)=>k));
-  const win=B.score>A.score+0.01?'v2':'v1';st.featSet=win;st.featAt=Date.now();setFeatSet(win);
+    const a=top(.1),b=top(.2);return{k,top10_r:a.r,top10_win:a.w,top20_r:b.r,score:(a.r+b.r)/2}};
+  const d=iso(now),lines=[],vgl={};
+  for(const g of Object.keys(GROUP_NAMES)){
+    const cov=coverageDays(g,now),name=GROUP_NAMES[g];
+    if(cov<90){cur.delete(g);vgl[g]={wartet:`${Math.floor(cov)} von 90 Tagen gesammelt`};lines.push([d,'mit '+name,'','','','',`wartet (${Math.floor(cov)}/90 Tage)`].join(','));console.log(`Merkmale ${name}: ${Math.floor(cov)} von 90 Tagen gesammelt, Test folgt`);continue}
+    const testFrom=now-(cov>=winDays()?91:30)*DAY_MS;
+    const colsA=ALL.map((F,k)=>(!F.g||(cur.has(F.g)&&F.g!==g))?k:-1).filter(k=>k>=0),colsB=ALL.map((F,k)=>(!F.g||(cur.has(F.g)&&F.g!==g)||F.g===g)?k:-1).filter(k=>k>=0);
+    const A=score(colsA,testFrom),B=score(colsB,testFrom),use=B.score>A.score+0.01;
+    if(use)cur.add(g);else cur.delete(g);vgl[g]={ohne:+A.score.toFixed(3),mit:+B.score.toFixed(3),genutzt:use};
+    lines.push([d,'ohne '+name,A.k,A.top10_r.toFixed(3),A.top10_win.toFixed(3),A.top20_r.toFixed(3),use?'nein':'ja'].join(','),[d,'mit '+name,B.k,B.top10_r.toFixed(3),B.top10_win.toFixed(3),B.top20_r.toFixed(3),use?'ja':'nein'].join(','));
+    console.log(`Merkmale ${name}: ohne ${fmtR(A.score)}, mit ${fmtR(B.score)} → ${use?'nutzen':'weglassen'}`);
+  }
+  setFeatSet(['v1',...cur].join('+'));st.featSet=FEATSET;st.featAt=now;
   fs.mkdirSync(LOG+'/analyse',{recursive:true});
   const f=LOG+'/analyse/merkmale.csv',head='datum_utc,variante,anzahl_merkmale,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,gewaehlt';
-  const old=fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').slice(1):[];const d=iso(Date.now());
-  fs.writeFileSync(f,[head,...old,[d,'bisher',v1.length,A.top10_r.toFixed(3),A.top10_win.toFixed(3),A.top20_r.toFixed(3),win==='v1'?'ja':'nein'].join(','),[d,'erweitert',all,B.top10_r.toFixed(3),B.top10_win.toFixed(3),B.top20_r.toFixed(3),win==='v2'?'ja':'nein'].join(',')].join('\n')+'\n');
+  const old=fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').slice(1):[];
+  fs.writeFileSync(f,[head,...old,...lines].join('\n')+'\n');
   const af=LOG+'/analyse/aktuell.json';let ak={};try{ak=JSON.parse(fs.readFileSync(af,'utf8'))}catch(e){}
-  fs.writeFileSync(af,JSON.stringify({...ak,geo:st.geo||ak.geo,merkmale:win,merkmale_vergleich:{bisher:+A.score.toFixed(3),erweitert:+B.score.toFixed(3),gemessen:new Date().toISOString()}},null,1));
-  console.log(`Merkmal-Vergleich (${((Date.now()-t0)/1000).toFixed(0)} s, ${n} Beispiele): bisher ${fmtR(A.score)}, erweitert ${fmtR(B.score)} → ${win==='v2'?'erweitert':'bisher'}`);
+  fs.writeFileSync(af,JSON.stringify({...ak,geo:st.geo||ak.geo,merkmale:FEATSET,merkmale_vergleich:{...vgl,gemessen:new Date(now).toISOString()}},null,1));
+  console.log(`Merkmal-Vergleich (${((Date.now()-t0)/1e3).toFixed(0)} s, ${S.length} Beispiele): gewählt ${featLabel()}`);
 }
 
 /* ---------- Hauptlauf ---------- */
@@ -529,18 +621,20 @@ async function main(){
   markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
   console.log(`${markets.length} Märkte über 50k € in 24h, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
-  await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows)});
+  await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows,m.market)});
   markets.forEach(m=>{if(data[m.market])m.vol3d=vol3d(data[m.market])});
   markets=markets.filter(m=>data[m.market]&&(eligible(m)||st.pos[m.market]));
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
   console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
   await repair1m().catch(e=>console.warn('Reparatur 1-Minuten-Log',e.message));
+  await logExt().catch(e=>console.warn('Zusatzdaten',e.message));
   // Umstellung auf 12 Monate: Analysen und Modell einmalig neu berechnen (die bekannte Warnung nicht erneut senden)
+  if(st.featV!==2){st.featV=2;st.featAt=0}                                   // neue Merkmalgruppen gleich prüfen
   if(st.longV!==LONG_V){st.longV=LONG_V;st.geoAt=0;st.featAt=0;st.model=null;if(st.edge===undefined&&st.geo)st.edge=false}
   if(st.geo)GEO={...GEO,...st.geo};
   setFeatSet(st.featSet||'v1');
-  const due=!st.winAt||!st.model||st.model.tf!==TF||st.model.merkmale!==(st.featSet||'v1')||Date.now()-(st.modelAt||0)>DAY_MS;
+  const due=!st.winAt||!st.featAt||!st.model||st.model.tf!==TF||st.model.merkmale!==(st.featSet||'v1')||Date.now()-(st.modelAt||0)>DAY_MS;
   if(due&&Date.now()-(st.longTryAt||0)>36e5){try{await longTrain()}catch(e){console.warn('Langzeit-Training fehlgeschlagen, nächster Versuch in 1 h:',e.message)}}
   if(st.geo)GEO={...GEO,...st.geo};
   setFeatSet(st.featSet||'v1');setBtc();
