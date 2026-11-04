@@ -157,6 +157,13 @@ a{color:var(--accent)}
 .chipin input{font:inherit;font-family:var(--f-mono);color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 10px;width:96px}
 .calc{font-size:13px;line-height:1.5}
 .calc b{font-family:var(--f-mono);font-weight:600}
+.pcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:620px){.pcols{grid-template-columns:minmax(0,1fr)}}
+.pcol{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.pcol b{font:600 18px var(--f-mono)}
+.pcol .muted{font-size:12px}
+.pspark{width:100%;height:60px;display:block}
+details summary{cursor:pointer;font-size:13px;padding:4px 0}
 footer{font-size:12px;color:var(--muted);max-width:75ch}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -194,6 +201,12 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <section class="panel" aria-label="Beste Kandidaten" style="padding:12px 16px;display:flex;flex-direction:column;gap:4px">
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Beste Kandidaten</h2><span class="muted" style="font-size:12px" id="candsHint"></span></div>
     <div id="cands"><div class="muted">Wird geladen…</div></div>
+  </section>
+
+  <section class="panel" aria-label="Papierhandel" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Papierhandel</h2><span class="muted" id="paperTime" style="font-size:12px"></span></div>
+    <p class="hint">So würde der Bot über die Bitvavo-API handeln, simuliert und ohne echtes Geld. Er kauft bei jedem «Starker Kauf» für 100 € (Startkapital 1'000 €, höchstens 10 Positionen) und verkauft nach Plan: Stop-Loss, nachziehender Stop, Ziel oder spätestens nach der Haltedauer. Zwei Varianten: mit Limit-Orders (0,15 % Gebühr, Order verfällt nach 15 Minuten) und mit Marktorders (0,25 %). Daneben stehen deine eigenen Trades seit dem Start.</p>
+    <div id="paper"><div class="muted">Wird geladen…</div></div>
   </section>
 
   <div class="learn">
@@ -515,6 +528,7 @@ async function run(force){
     if(full&&!(await loadBotModel()))await trainModel();
     results={};markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
     journalUpdate();pfUpdate();checkAlerts();
+    loadPaper();
     render();renderMood();renderCands();renderModel();renderJournal();renderPf();renderLog();
     if(!selected&&window.innerWidth>900){const best=sorted()[0];if(best)select(best.market)}else if(selected&&!$('#posBox')?.contains(document.activeElement))renderDetail();
     setStat(`${markets.filter(eligible).length} Märkte (>50k €/24h, >250k €/3T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
@@ -597,6 +611,7 @@ function advice(p){
 }
 function pfUpdate(){pf.forEach(p=>{const l=curOf(p.m);if(l==null)return;p.high=Math.max(p.high,l);if(l>=p.tp)p.tpHit=true});store('bvr-pf',pf)}
 function renderPf(){
+  if(paper)renderPaper();
   const el=$('#pfList');
   if(!pf.length){el.innerHTML='<div class="muted" style="padding:6px 0">Noch keine Coins eingetragen. Tippe in der Liste auf einen Coin und trage unter «Meine Position» deinen Kauf ein.</div>';}
   else el.innerHTML=pf.map(p=>{const a=advice(p),b=p.m.replace('-EUR','');return `<div class="pfrow" tabindex="0" data-m="${p.m}">
@@ -756,6 +771,30 @@ function initNotify(){
   $('#cands').addEventListener('click',e=>{const r=e.target.closest('.cand');if(r&&results[r.dataset.m])select(r.dataset.m)});
   $('#pfList').addEventListener('click',e=>{const r=e.target.closest('.pfrow');if(r&&results[r.dataset.m])select(r.dataset.m)});
   nStatus();renderLog();renderPf();
+}
+
+/* ---------- Papierhandel: simulierter API-Bot gegen deine eigenen Trades ---------- */
+let paper=null;
+async function loadPaper(){try{paper=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/papier.json?'+Math.floor(Date.now()/6e4))}catch(e){}renderPaper()}
+function spark(pts,key,lo,hi,w,h,col){if(pts.length<2)return'';const x=i=>(i/(pts.length-1)*w).toFixed(1),y=v=>(h-2-(v-lo)/((hi-lo)||1)*(h-4)).toFixed(1);
+  return `<polyline fill="none" stroke="var(${col})" stroke-width="1.6" points="${pts.map((p,i)=>x(i)+','+y(p[key])).join(' ')}"/>`}
+function renderPaper(){
+  const el=$('#paper');if(!el)return;
+  if(!paper){el.innerHTML='<div class="muted">Noch keine Daten. Der Bot startet den Papierhandel beim nächsten Lauf.</div>';$('#paperTime').textContent='';return}
+  const start=Date.parse(paper.start),f=d=>new Date(d).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  $('#paperTime').textContent=`seit ${f(start)} · Stand ${f(paper.stand)}`;
+  // Deine Trades seit Start des Papierhandels (nur Einträge mit Menge)
+  const cl=closed.filter(c=>c.t>=start&&c.eur!=null),op=pf.filter(p=>p.t>=start&&p.qty&&curOf(p.m)!=null);
+  const myReal=cl.reduce((s,c)=>s+c.eur,0),myOpen=op.reduce((s,p)=>s+p.qty*curOf(p.m)*(1-FEE)-(p.cost??p.buy*p.qty*(1+FEE)),0);
+  const myInv=cl.reduce((s,c)=>s+c.buy*c.qty*(1+FEE),0)+op.reduce((s,p)=>s+(p.cost??p.buy*p.qty*(1+FEE)),0);
+  const col=(title,res,pctv,sub)=>`<div class="pcol"><span class="lbl">${title}</span><b class="${res>=0?'up':'down'}">${res>=0?'+':''}${res.toFixed(2)} €</b><span class="num ${res>=0?'up':'down'}">${pct(pctv)}</span><span class="muted">${sub}</span></div>`;
+  const V=paper.varianten,vs=['limit','markt'].map(k=>{const v=V[k];return col('Bot · '+v.name,v.ergebnis,v.ergebnis_pct,`${v.trades} Verkäufe, ${v.gewinner} im Gewinn · Gebühren ${v.gebuehren.toFixed(2)} € · ${v.offen.length} offen${v.orders.length?`, ${v.orders.length} Order${v.orders.length>1?'s':''} offen`:''}${v.storniert?` · ${v.storniert} Limit-Orders verfallen`:''}`)});
+  const me=col('Du · manuell',myReal+myOpen,myInv?(myReal+myOpen)/myInv*100:0,`${cl.length} Verkäufe, ${cl.filter(c=>c.eur>0).length} im Gewinn · ${op.length} offen · nur Einträge mit Menge`);
+  const pts=paper.verlauf||[],vals=pts.flatMap(p=>[p.limit,p.markt]),lo=Math.min(...vals,paper.kapital),hi=Math.max(...vals,paper.kapital);
+  const svg=pts.length>1?`<svg viewBox="0 0 300 60" preserveAspectRatio="none" class="pspark" aria-label="Verlauf Papierhandel">${(()=>{const y=(60-2-(paper.kapital-lo)/((hi-lo)||1)*56).toFixed(1);return `<line x1="0" x2="300" y1="${y}" y2="${y}" stroke="var(--line)" stroke-dasharray="3 3"/>`})()}${spark(pts,'limit',lo,hi,300,60,'--accent')}${spark(pts,'markt',lo,hi,300,60,'--warn')}</svg><div class="lbl" style="display:flex;gap:14px"><span style="color:var(--accent)">— Limit</span><span style="color:var(--warn)">— Markt</span><span>┄ Start ${paper.kapital} €</span></div>`:'';
+  const openRows=['limit','markt'].flatMap(k=>V[k].offen.map(o=>`<div class="jrow" style="grid-template-columns:60px 1fr 1fr 80px"><span class="tag open">${k==='limit'?'Limit':'Markt'}</span><b>${o.markt.replace('-EUR','')}</b><span class="num muted">${fmtP(o.kauf)} → ${fmtP(o.kurs)}</span><span class="num ${o.ergebnis>=0?'up':'down'}" style="text-align:right">${o.ergebnis>=0?'+':''}${o.ergebnis.toFixed(2)} €</span></div>`)).join('');
+  el.innerHTML=`<div class="pcols">${vs.join('')}${me}</div>${svg}
+    ${openRows?`<details><summary class="muted">Offene Positionen im Papierhandel</summary><div class="jrows">${openRows}</div></details>`:''}`;
 }
 
 /* ---------- Render ---------- */

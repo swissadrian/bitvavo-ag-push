@@ -31,6 +31,16 @@ Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push, mit Einsatz, Erlö
 
 Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.enc`). Schlüssel ist dein ntfy-Kanal: Ohne ihn kann niemand die Datei lesen. Änderst du den Kanal, beginnt der Bot mit leerem Bestand.
 
+## Papierhandel (Probelauf für den Handel über die API)
+
+Der Bot handelt simuliert und ohne echtes Geld so, wie er es über die Bitvavo-API täte. Bei jedem neuen «Starker Kauf» kauft er für 100 € (Startkapital 1'000 €, höchstens 10 Positionen gleichzeitig). Verkauft wird nach Plan: Stop-Loss, nachziehender Stop, Ziel, Verkaufssignal oder spätestens nach der Haltedauer. Geprüft wird Minute für Minute anhand der 1-Minuten-Kerzen.
+
+Zwei Varianten laufen parallel:
+- **Limit-Orders:** Kauf zum Geldkurs mit 0,15 % Gebühr. Die Order verfällt nach 15 Minuten, wenn der Kurs nicht hinkommt. Verkauf am Ziel ebenfalls per Limit.
+- **Marktorders:** Kauf zum Briefkurs und Verkauf sofort, jeweils mit 0,25 % Gebühr.
+
+Der Stop-Loss ist in beiden Varianten eine Marktorder. Alle Trades stehen in `papier/JJJJ-MM.csv`, die Übersicht in `analyse/papier.json`. Die Radar-App zeigt beide Varianten neben deinen eigenen Trades seit dem Start.
+
 ## Lernen aus 12 oder 24 Monaten
 
 Einmal täglich lädt der Bot die Stundenkerzen der letzten 24 Monate aller Coins der Beobachtungsliste. Beim ersten Mal sind das etwa 14 Abfragen pro Coin, danach nur noch das Neue. Daraus trainiert er das Modell und veröffentlicht es in `analyse/modell.json`. Die 5-Minuten-Läufe und die Radar-App (bei 1h) verwenden dieses Modell.

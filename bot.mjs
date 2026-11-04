@@ -187,7 +187,7 @@ function analyze(m,d){
 }
 
 
-let TF=process.env.TF||'1h', markets=[], data={}, results={}, model=null, lastTrain=0;
+let TF=process.env.TF||'1h', markets=[], data={}, results={}, model=null, lastTrain=0, BOOK={};
 const setStat=t=>console.log(t), tick=async()=>{};
 
 const TOPIC=(process.env.NTFY_TOPIC||'').trim();
@@ -360,7 +360,7 @@ async function logExt(){
     const bid=bids[0][0],ask=asks[0][0],mid=(bid+ask)/2,dep=(arr,lo,hi)=>arr.reduce((s,[p,a])=>p>=lo&&p<=hi?s+p*a:s,0);
     const b1=dep(bids,mid*.99,Infinity),a1=dep(asks,0,mid*1.01),b2=dep(bids,mid*.98,Infinity),a2=dep(asks,0,mid*1.02);
     const o={spread:(ask-bid)/mid*100,b1,a1,b2,a2,imb:b1+a1>0?(b1-a1)/(b1+a1):0};
-    EXT.ob.set(m.market,new Map([[h,o]]));live.orderbuch[m.market]={spread:+o.spread.toFixed(4),b2:Math.round(b2),a2:Math.round(a2),imb:+o.imb.toFixed(3)};
+    EXT.ob.set(m.market,new Map([[h,o]]));BOOK[m.market]={bid,ask};live.orderbuch[m.market]={spread:+o.spread.toFixed(4),b2:Math.round(b2),a2:Math.round(a2),imb:+o.imb.toFixed(3)};
     rows.push([t,m.market,bid,ask,o.spread.toFixed(4),Math.round(b1),Math.round(a1),Math.round(b2),Math.round(a2),o.imb.toFixed(3)]);
   });
   rows.sort((a,b)=>a[1]<b[1]?-1:1);appendCsv(hourFile(TIERS.orderbuch[0].dir,now),HO,rows);
@@ -430,7 +430,7 @@ function housekeeping(){
   for(const p of files(`${LOG}/markt`)){fs.unlinkSync(p);deleted++}
   // Monatsdateien (Läufe, Meldungen) nach 3 Jahren löschen
   const cutMon=dayOf(now-1095*DAY_MS).slice(0,7);
-  for(const p of [...files(`${LOG}/laeufe`),...files(`${LOG}/meldungen`)]){const m=path.basename(p).match(/^(\d{4}-\d{2})\.csv/);if(m&&m[1]<cutMon){fs.unlinkSync(p);deleted++}}
+  for(const p of [...files(`${LOG}/laeufe`),...files(`${LOG}/meldungen`),...files(`${LOG}/papier`)]){const m=path.basename(p).match(/^(\d{4}-\d{2})\.csv/);if(m&&m[1]<cutMon){fs.unlinkSync(p);deleted++}}
   const prune=d=>{if(!fs.existsSync(d))return;for(const e of fs.readdirSync(d,{withFileTypes:true}))if(e.isDirectory()&&e.name!=='.git'){prune(d+'/'+e.name);if(!fs.readdirSync(d+'/'+e.name).length)fs.rmdirSync(d+'/'+e.name)}};prune(LOG);
   if(packed||thinned||deleted)console.log(`Aufgeräumt: ${packed} Stunden gepackt, ${thinned} Tage verdichtet, ${deleted} gelöscht.`);
 }
@@ -620,6 +620,64 @@ async function featureAB(src=data,minTs=0){
   console.log(`Merkmal-Vergleich (${((Date.now()-t0)/1e3).toFixed(0)} s, ${S.length} Beispiele): gewählt ${featLabel()}`);
 }
 
+/* ---------- Papierhandel: so würde der Bot über die Bitvavo-API handeln (simuliert, ohne echtes Geld) ---------- */
+// Zwei Varianten mit denselben Signalen: «limit» kauft mit Limit-Order zum Geldkurs (0,15 %, verfällt nach 15 Min)
+// und verkauft am Ziel per Limit; «markt» kauft und verkauft sofort zum Marktpreis (0,25 %). Stop-Loss immer als Marktorder.
+const PAPER={kapital:1000,betrag:100,maxPos:10,maker:0.0015,taker:0.0025,limitMin:15};
+const VARIANTS={limit:'Limit-Orders',markt:'Marktorders'};
+const HP=['variante','markt','kauf_utc','kaufpreis','menge','verkauf_utc','verkaufspreis','grund','gebuehren_eur','ergebnis_eur','ergebnis_pct'];
+async function paperStep(){
+  const now=Date.now();
+  if(!st.paper)st.paper={start:now,prevOn:{},lastCheck:now-5*6e4,curve:[]};
+  const P=st.paper;for(const k of Object.keys(VARIANTS))if(!P[k])P[k]={cash:PAPER.kapital,pos:{},orders:{},fees:0,closed:0,wins:0,pnl:0,storniert:0};
+  // 1-Minuten-Kerzen seit der letzten Prüfung für alle offenen Positionen und Orders
+  const need=new Set();for(const k of Object.keys(VARIANTS)){Object.keys(P[k].pos).forEach(m=>need.add(m));Object.keys(P[k].orders).forEach(m=>need.add(m))}
+  const bars={},from=Math.max(P.lastCheck-6e4,now-6*36e5);
+  await pool([...need],5,async mk=>{const r=await j(`${API}/${mk}/candles?interval=1m&limit=1440&start=${from}&end=${now}`);bars[mk]=(r||[]).map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]})).filter(b=>b.t+6e4<=now).sort((a,b)=>a.t-b.t)});
+  const lastPx=mk=>BOOK[mk]?.bid??results[mk]?.d.c.at(-1)??bars[mk]?.at(-1)?.c;
+  const rows=[];
+  const close=(k,mk,price,fee,why,t)=>{const V=P[k],x=V.pos[mk],net=x.qty*price*(1-fee),res=net-x.cost;V.cash+=net;V.fees+=x.qty*price*fee;V.closed++;if(res>0)V.wins++;V.pnl+=res;
+    rows.push([k,mk,iso(x.t),x.entry,+x.qty.toPrecision(10),iso(t),+price.toPrecision(8),why,(x.fee+x.qty*price*fee).toFixed(3),res.toFixed(3),(res/x.cost*100).toFixed(2)]);delete V.pos[mk]};
+  const open=(k,mk,entry,qty,fee,t)=>{const a=results[mk]?.d?.A.at(-1)??entry*0.02,R=riskOf(entry,a),cost=entry*qty*(1+fee);
+    P[k].pos[mk]={entry,qty,cost,fee:entry*qty*fee,t,R,stop:entry-R,tp:entry+GEO.tp*R,high:entry};P[k].fees+=entry*qty*fee};
+  for(const k of Object.keys(VARIANTS)){const V=P[k];
+    // Limit-Kauforders: ausgeführt, sobald der Kurs den Limitpreis erreicht; sonst nach 15 Min storniert
+    for(const [mk,o] of Object.entries(V.orders)){const hit=(bars[mk]||[]).find(b=>b.t>=o.t-6e4&&b.l<=o.limit);
+      if(hit){delete V.orders[mk];V.cash+=o.reserve;V.cash-=o.limit*o.qty*(1+PAPER.maker);open(k,mk,o.limit,o.qty,PAPER.maker,Math.max(hit.t,o.t))}
+      else if(now-o.t>PAPER.limitMin*6e4){V.cash+=o.reserve;delete V.orders[mk];V.storniert++}}
+    // Offene Positionen Minute für Minute: Stop-Loss (Marktorder), Ziel (Limit bzw. Markt), nachziehender Stop
+    for(const [mk,x] of Object.entries(V.pos)){
+      for(const b of bars[mk]||[]){if(b.t<x.t||!V.pos[mk])continue;
+        if(b.l<=x.stop){close(k,mk,Math.min(x.stop,b.o),PAPER.taker,x.stop>x.entry?'Nachziehender Stop':'Stop-Loss',b.t);break}
+        if(b.h>=x.tp){close(k,mk,k==='limit'?x.tp:Math.max(x.tp,b.o)*0.9995,k==='limit'?PAPER.maker:PAPER.taker,'Ziel',b.t);break}
+        x.high=Math.max(x.high,b.h);if(x.high>=x.entry+x.R)x.stop=Math.max(x.stop,x.high-x.R)}
+      if(!V.pos[mk])continue;const px=lastPx(mk);if(px==null)continue;
+      if(now-x.t>=GEO.h*36e5)close(k,mk,px,PAPER.taker,'Haltedauer',now);
+      else if(results[mk]&&results[mk].cal.q<=1)close(k,mk,px,PAPER.taker,'Verkaufssignal',now)}
+  }
+  // Neue Käufe: dieselben Signale, die du als Push bekommst
+  for(const m of markets){const r=results[m.market];if(!r||!eligible(m))continue;const on=r.sig[0]>=LEVEL,prev=P.prevOn[m.market];P.prevOn[m.market]=on;if(!on||prev)continue;
+    const bk=BOOK[m.market]||{bid:m.last,ask:m.last};
+    for(const k of Object.keys(VARIANTS)){const V=P[k];if(V.pos[m.market]||V.orders[m.market])continue;
+      if(Object.keys(V.pos).length+Object.keys(V.orders).length>=PAPER.maxPos||V.cash<PAPER.betrag)continue;
+      if(k==='markt'){const q=PAPER.betrag/(bk.ask*(1+PAPER.taker));V.cash-=PAPER.betrag;open(k,m.market,bk.ask,q,PAPER.taker,now)}
+      else{const q=PAPER.betrag/(bk.bid*(1+PAPER.maker));V.cash-=PAPER.betrag;V.orders[m.market]={limit:bk.bid,qty:q,reserve:PAPER.betrag,t:now}}}}
+  P.lastCheck=now;
+  rows.sort((a,b)=>a[5]<b[5]?-1:1);appendCsv(`papier/${iso(now).slice(0,7)}.csv`,HP,rows);
+  // Übersicht für die App
+  const sum={start:new Date(P.start).toISOString(),stand:new Date(now).toISOString(),betrag:PAPER.betrag,kapital:PAPER.kapital,varianten:{}};
+  for(const [k,name] of Object.entries(VARIANTS)){const V=P[k];let val=V.cash;const pos=[];
+    for(const [mk,x] of Object.entries(V.pos)){const px=lastPx(mk)??x.entry,v=x.qty*px*(1-PAPER.taker);val+=v;pos.push({markt:mk,kauf:x.entry,seit:new Date(x.t).toISOString(),kurs:px,ergebnis:+(v-x.cost).toFixed(2),stop:+x.stop.toPrecision(6),ziel:+x.tp.toPrecision(6)})}
+    for(const o of Object.values(V.orders))val+=o.reserve;
+    sum.varianten[k]={name,wert:+val.toFixed(2),ergebnis:+(val-PAPER.kapital).toFixed(2),ergebnis_pct:+((val/PAPER.kapital-1)*100).toFixed(2),realisiert:+V.pnl.toFixed(2),gebuehren:+V.fees.toFixed(2),
+      trades:V.closed,gewinner:V.wins,offen:pos,orders:Object.keys(V.orders),storniert:V.storniert}}
+  const day=iso(now).slice(0,13);if(!P.curve.length||P.curve.at(-1).t!==day)P.curve.push({t:day,limit:sum.varianten.limit.wert,markt:sum.varianten.markt.wert});else Object.assign(P.curve.at(-1),{limit:sum.varianten.limit.wert,markt:sum.varianten.markt.wert});
+  P.curve=P.curve.slice(-24*60);sum.verlauf=P.curve;
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/papier.json',JSON.stringify(sum));
+  console.log(`Papierhandel: Limit ${fmtEur(sum.varianten.limit.ergebnis)} (${Object.keys(P.limit.pos).length} offen, ${Object.keys(P.limit.orders).length} Orders), Markt ${fmtEur(sum.varianten.markt.ergebnis)} (${Object.keys(P.markt.pos).length} offen), ${rows.length} Verkäufe in diesem Lauf`);
+}
+const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -680,6 +738,7 @@ async function main(){
   if(!st.ok)await push('Bitvavo-Bot läuft wieder','Daten werden wieder normal abgerufen.',2,'white_check_mark');
   st.ok=true;
   try{retro()}catch(e){console.warn('Rückblick',e.message)}
+  await paperStep().catch(e=>console.warn('Papierhandel',e.message));
   logRun(buys);
   console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
