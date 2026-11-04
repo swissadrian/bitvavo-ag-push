@@ -145,10 +145,10 @@ function predict(m,x){let s=m.b;for(let k=0;k<m.w.length;k++){const v=x[k];if(v=
 function contrib(m,x){return x.map((v,k)=>v===v?m.w[k]*(v-m.mu[k])/m.sd[k]:0)}
 
 // src: Kursverlauf je Markt; stride: nur jede n-te Kerze verwenden (bei sehr langem Verlauf)
-async function trainModel(src=data,stride=1,minTs=0){
+async function trainModel(src=data,stride=1,minTs=0,maxTs=Infinity){
   setStat('Lerne aus der Vergangenheit: sammle Beispiele…','');await tick();
   const S=[];const H=horBars();
-  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
+  for(const mk of Object.keys(src)){const d=src[mk];for(let i=210;i<d.c.length-H;i+=stride){if(!d.A[i]||d.ts[i]<minTs||d.ts[i]>=maxTs)continue;const o=outcome(d,i);S.push({mk,ts:d.ts[i],x:feat(d,i),y:o.y,r:o.r})}}
   if(S.length<500)throw new Error('zu wenig Verlaufsdaten zum Lernen');
   S.sort((a,b)=>a.ts-b.ts);
   const n=S.length,cut=Math.floor(n*.75);
@@ -678,6 +678,75 @@ async function paperStep(){
 }
 const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
 
+/* ---------- Rückwärtstest: Wie hätte der API-Bot in den letzten 12 Monaten abgeschnitten? (einmalig) ---------- */
+// Walk-forward: Für jeden Monat wird das Modell nur mit den 12 Monaten davor trainiert, dann wird der Monat Stunde für Stunde
+// wie im Papierhandel gehandelt (100 € pro Trade, Start 1'000 €, max. 10 Positionen). Spread je Coin aus dem heutigen Orderbuch.
+const BT_V=1;
+async function backtest(){
+  if(st.btV===BT_V)return;const t0=Date.now();
+  const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
+  const hist={};await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300)hist[mk]=prep(rows,mk)});
+  setBtc(hist);await loadFgHistory();setFeatSet(st.featSet||'v1');if(st.geo)GEO={...GEO,...st.geo};
+  let live={};try{live=JSON.parse(fs.readFileSync(LOG+'/analyse/live.json','utf8')).orderbuch||{}}catch(e){}
+  const hsOf=mk=>clip((live[mk]?.spread??0.3)/200,0.0002,0.01);                      // halber Spread als Anteil
+  const step=36e5,H=horBars(),now=Date.now(),months=[];
+  for(let k=12;k>=0;k--){const d=new Date(now);d.setUTCDate(1);d.setUTCHours(0,0,0,0);d.setUTCMonth(d.getUTCMonth()-k);months.push(+d)}
+  const bt={limit:{eq:[],trades:[]},markt:{eq:[],trades:[]}};
+  const state={limit:{cash:1000,pos:{},pend:{},real:0},markt:{cash:1000,pos:{},pend:{},real:0}};
+  const idx={};for(const [mk,d] of Object.entries(hist)){const m=new Map();d.ts.forEach((t,i)=>m.set(t,i));idx[mk]=m}
+  const vEur=(d,i,n)=>{let s=0;for(let k=Math.max(0,i-n+1);k<=i;k++)s+=d.v[k]*d.c[k];return s};
+  const bySig={};let prevSig={};
+  for(let mi=0;mi<months.length;mi++){
+    const mStart=months[mi],mEnd=mi+1<months.length?months[mi+1]:now;
+    // Modell nur aus der Vergangenheit (Labels enden vor Monatsbeginn)
+    await trainModel(hist,Math.max(1,Math.round(Object.values(hist).reduce((s,d)=>s+d.c.length,0)/2/450000)),mStart-365*DAY_MS,mStart-H*step);
+    const hours=[];for(let t=Math.ceil(mStart/step)*step;t<mEnd;t+=step)hours.push(t);
+    for(const t of hours){
+      // Signale dieser Stunde (Kerze t schliesst bei t+1h)
+      const sig={};
+      for(const [mk,d] of Object.entries(hist)){const i=idx[mk].get(t);if(i==null||i<210||!d.A[i])continue;
+        const p=predict(model,feat(d,i)),c=calib(p);sig[mk]={lvl:c.r>=.25?2:c.r>=.08?1:0,q:c.q,i,elig:vEur(d,i,24)>=MIN_VOL&&vEur(d,i,72)>=MIN_VOL3D}}
+      for(const k of ['limit','markt']){const S=state[k];
+        // offene Limit-Kauforders der Vorstunde: ausgeführt, wenn das Tief den Limitpreis erreicht
+        for(const [mk,o] of Object.entries(S.pend)){const d=hist[mk],i=idx[mk].get(t);delete S.pend[mk];S.cash+=100;if(i==null)continue;
+          if(d.l[i]<=o.L){const q=100/(o.L*(1+PAPER.maker));S.cash-=100;S.pos[mk]={entry:o.L,q,cost:100,t,R:o.R,stop:o.L-o.R,tp:o.L+GEO.tp*o.R,high:o.L,fill:true}}}
+        // Ausstiege anhand der Stundenkerze
+        for(const [mk,x] of Object.entries(S.pos)){const d=hist[mk],i=idx[mk].get(t);if(i==null)continue;const hs=hsOf(mk);let px=null,why='';
+          if(x.fill){x.fill=false}                                                         // in dieser Stunde erst ausgeführt
+          else if(d.l[i]<=x.stop){px=Math.min(x.stop,d.o[i])*(1-hs);why=x.stop>x.entry?'Nachziehender Stop':'Stop-Loss'}
+          else if(d.h[i]>=x.tp){px=k==='limit'?x.tp:x.tp*(1-hs);why='Ziel'}
+          else{x.high=Math.max(x.high,d.h[i]);if(x.high>=x.entry+x.R)x.stop=Math.max(x.stop,x.high-x.R);
+            if(t+step-x.t>=GEO.h*36e5){px=d.c[i]*(1-hs);why='Haltedauer'}else if(sig[mk]&&sig[mk].q<=1){px=d.c[i]*(1-hs);why='Verkaufssignal'}}
+          if(px!=null){const fee=why==='Ziel'&&k==='limit'?PAPER.maker:PAPER.taker,net=x.q*px*(1-fee),res=net-x.cost;S.cash+=net;S.real+=res;
+            bt[k].trades.push([k,mk,iso(x.t),+x.entry.toPrecision(6),iso(t+step),+px.toPrecision(6),why,res.toFixed(2)]);delete S.pos[mk]}}
+        // neue Käufe bei frischem «Starker Kauf» (Stunde vorher kein Starker Kauf)
+        for(const [mk,s] of Object.entries(sig)){if(s.lvl<LEVEL||(prevSig[mk]??0)>=LEVEL||!s.elig||mk==='BTC-EUR'&&false)continue;
+          if(S.pos[mk]||S.pend[mk]||Object.keys(S.pos).length+Object.keys(S.pend).length>=PAPER.maxPos||S.cash<100)continue;
+          const d=hist[mk],i=s.i,hs=hsOf(mk),R=riskOf(d.c[i],d.A[i]);
+          if(k==='markt'){const e=d.c[i]*(1+hs),q=100/(e*(1+PAPER.taker));S.cash-=100;S.pos[mk]={entry:e,q,cost:100,t:t+step,R,stop:e-R,tp:e+GEO.tp*R,high:e}}
+          else{S.cash-=100;S.pend[mk]={L:d.c[i]*(1-hs),R}}}
+      }
+      for(const [mk,s] of Object.entries(sig))prevSig[mk]=s.lvl;
+    }
+    // Monatsende: Wert inkl. offener Positionen (zum Schlusskurs, nach Verkaufskosten)
+    for(const k of ['limit','markt']){const S=state[k];let v=S.cash+Object.keys(S.pend).length*100;
+      for(const [mk,x] of Object.entries(S.pos)){const d=hist[mk],i=d.ts.length-1-[...d.ts].reverse().findIndex(tt=>tt<mEnd);v+=x.q*d.c[i]*(1-hsOf(mk))*(1-PAPER.taker)}
+      bt[k].eq.push({monat:new Date(mStart).toISOString().slice(0,7),wert:+v.toFixed(2)})}
+    console.log(`Rückwärtstest ${new Date(mStart).toISOString().slice(0,7)}: Limit ${bt.limit.eq.at(-1).wert} €, Markt ${bt.markt.eq.at(-1).wert} €`);
+  }
+  // Bitcoin halten zum Vergleich
+  const B=hist['BTC-EUR'],btcAt=t=>{let i=B.ts.findIndex(x=>x>=t);if(i<0)i=B.ts.length-1;return B.c[i]};
+  const out={erstellt:new Date().toISOString(),dauer_s:Math.round((Date.now()-t0)/1e3),regeln:{betrag:100,kapital:1000,maxPos:PAPER.maxPos,geo:GEO,merkmale:FEATSET,signal:'Starker Kauf'},varianten:{}};
+  for(const k of ['limit','markt']){const T=bt[k].trades,res=T.map(x=>+x[7]);let prev=1000;
+    out.varianten[k]={monate:bt[k].eq.map(e=>{const r={monat:e.monat,wert:e.wert,ergebnis:+(e.wert-prev).toFixed(2),pct:+((e.wert-prev)/1000*100).toFixed(2)};prev=e.wert;return r}),
+      trades:T.length,gewinner:res.filter(r=>r>0).length,summe:+res.reduce((a,b)=>a+b,0).toFixed(2),schnitt:T.length?+(res.reduce((a,b)=>a+b,0)/T.length).toFixed(3):0,
+      gruende:Object.fromEntries([...new Set(T.map(x=>x[6]))].map(g=>[g,T.filter(x=>x[6]===g).length]))}}
+  out.btc=months.map((m,i)=>({monat:new Date(m).toISOString().slice(0,7),pct:+((btcAt(i+1<months.length?months[i+1]:now)/btcAt(m)-1)*100).toFixed(2)}));
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/rueckwaertstest.json',JSON.stringify(out,null,1));
+  fs.writeFileSync(LOG+'/analyse/rueckwaertstest_trades.csv',['variante,markt,kauf_utc,kaufpreis,verkauf_utc,verkaufspreis,grund,ergebnis_eur',...bt.limit.trades,...bt.markt.trades].map(r=>Array.isArray(r)?r.join(','):r).join('\n')+'\n');
+  st.btV=BT_V;console.log(`Rückwärtstest fertig (${out.dauer_s} s): Limit ${out.varianten.limit.summe} €, Markt ${out.varianten.markt.summe} € in ${months.length} Monaten`);
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -740,6 +809,7 @@ async function main(){
   try{retro()}catch(e){console.warn('Rückblick',e.message)}
   await paperStep().catch(e=>console.warn('Papierhandel',e.message));
   logRun(buys);
+  await backtest().catch(e=>console.warn('Rückwärtstest',e.stack||e.message));
   console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
 
