@@ -93,3 +93,5 @@ for(const [lab,start] of [['ab_2019',Date.UTC(2019,0,1)],['ab_2020',Date.UTC(202
 function pick(s){return{pro_jahr_chf:s.chf.pro_jahr_pct,rueckgang_chf:s.chf.max_rueckgang_pct,letzte_12m_chf:s.chf.letzte_12_monate_pct,trades:s.trades}}
 fs.mkdirSync('ergebnis',{recursive:true});fs.writeFileSync('ergebnis/top5_backtest.json',JSON.stringify(out,null,1));
 for(const [lab,e] of Object.entries(out.ergebnisse)){console.log('==',lab);for(const s of e.strategien)console.log(s.name.padEnd(70),'CHF',s.chf.ende,s.chf.pro_jahr_pct+'%/J','DD',s.chf.max_rueckgang_pct,'12M',s.chf.letzte_12_monate_pct,'Trades',s.trades,'Luecken',s.luecken_tage)}
+// Für das Protokoll: alle Kennzahlen ohne Verlauf (Download-Pakete sind nicht überall abrufbar)
+console.log('JSON-START');console.log(JSON.stringify({...out,ergebnisse:Object.fromEntries(Object.entries(out.ergebnisse).map(([k,e])=>[k,{...e,strategien:e.strategien.map(({verlauf,...s})=>({...s,verlauf_monatlich:verlauf.filter((_,i)=>i%4===0)}))}]))}));console.log('JSON-ENDE');
