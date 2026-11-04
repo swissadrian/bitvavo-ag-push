@@ -1,4 +1,4 @@
-# Bitvavo Signal-Bot
+# Crypto Handel Bitvavo
 
 Prüft alle 5 Minuten die **USDC-Märkte** auf Bitvavo mit mehr als 50'000 $ Volumen am letzten Tag **und** mehr als 1 Mio. $ in den letzten 30 Tagen (Stand November 2026: ETH, XRP, BTC, SOL, ADA). Gehandelt wird gegen USDC, weil die Gebühr dort 0,05 % statt 0,25 % beträgt. Positionen, die noch in EUR-Märkten gekauft wurden, bleiben in EUR und werden weiter überwacht, bis sie verkauft sind. So bleiben kleine Coins mit wenig Handel draussen. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
 
@@ -130,3 +130,38 @@ Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil da
 Einmalig gerechnet (`analyse/usdctest.json`): nur Coins, die gegen USDC mit mehr als 50'000 $ am Tag gehandelt werden, Kosten 0,05 % plus halber Spread aus dem USDC-Orderbuch, Kurse in US-Dollar mit dem EZB-Kurs EUR/USD, Umtausch EUR→USDC 0,10 % am Anfang und Ende, Ergebnis zusätzlich in Franken (EZB-Kurs EUR/CHF). Zur Kontrolle der Empfindlichkeit: 40, 50 und 60 Tage und jeder Wochentag als Umschichttag.
 
 Befehle an den Bot (ntfy-Kanal mit `-cmd`): `kauf BTC-USDC 71500 0.02`, `verkauf BTC-USDC 73000`, `verkauf BTC-USDC 73000 0.01`, `liste`. Ohne `-USDC` gilt der EUR-Markt (alte Positionen).
+
+## Automatik: Top 5 mit Trendfilter 50 Tage (gegen USDC)
+
+**Regeln:** 1000 € werden in USDC getauscht. 5 % bleiben als Reserve in USDC, je 19 % gehen in die 5 grössten Coins nach Marktkapitalisierung (CoinGecko), die auf Bitvavo einen liquiden USDC-Markt haben (> 50'000 $ am Tag, > 1 Mio. $ in 30 Tagen). Ein Coin wird nur gehalten, solange sein letzter Tagesschluss über dem 50-Tage-Durchschnitt liegt. Sonst bleibt sein Anteil in USDC.
+
+**Ablauf:** Einmal täglich, kurz nach Tagesschluss (00:00 UTC), mit Marktorders zu 0,05 % Gebühr. Ein Coin wird nachgezogen, wenn sein Gewicht mehr als 5 Prozentpunkte vom Ziel abweicht.
+
+**Kassenbuch:** Der Bot führt ein eigenes Kassenbuch und handelt nur damit. Andere Guthaben auf dem Konto rührt er nicht an. Jeden Lauf gleicht er das Kassenbuch mit dem Konto ab.
+
+**Modi:**
+- **papier** (Standard): simuliert, ohne Schlüssel.
+- **live:** echte Orders.
+- **pausiert**
+
+**Steuerung:** in der App (Abschnitt Automatik) oder per ntfy-Befehlskanal:
+- `auto status`
+- `auto start`: tauscht 1000 € in USDC und handelt live.
+- `auto stopp`
+- `auto verkaufen`: verkauft alle Bestände der Automatik in USDC und pausiert.
+- `auto papier`
+
+**Daten:** Stand in `analyse/auto.json`, Orders in `handel/auto-JJJJ-MM.csv`.
+
+**Live schalten** (nur durch dich):
+1. Bei Bitvavo unter Einstellungen → API einen Schlüssel anlegen. Rechte: **Anzeigen** und **Handeln**, **nicht Auszahlen**.
+2. Im Repository unter Settings → Secrets and variables → Actions zwei Secrets anlegen: `BITVAVO_KEY` und `BITVAVO_SECRET`.
+3. Mindestens 1000 € auf Bitvavo einzahlen.
+4. In der App «Live starten» zweimal tippen oder `auto start` senden. Die Secrets gelten ab dem nächsten Durchgang des Bots (spätestens nach 6 Stunden; sofort, wenn man den Workflow neu startet).
+
+## Rückwärtstest Top 5 / 50 Tage auf USD-Basis (`research/`)
+
+- **Rangliste:** CoinMarketCap-Monatslisten (Marktkapitalisierung, erster Sonntag im Monat, 2018–2026), ohne Stablecoins. Die Daten stehen in `research/cmc_top_monatlich.csv`.
+- **Kurse:** Binance (USDT), Lücken aus Bitfinex (USD) und Bitvavo (EUR × EZB).
+- **Kosten:** 0,10 % je Trade.
+- **Skript und Ergebnis:** `research/top5_backtest.mjs`, `research/ergebnis_top5_backtest.json`. Starten im Tab Actions mit dem Workflow «Rückwärtstest».

@@ -1,6 +1,6 @@
 {
-  "name": "Bitvavo Daytrade Radar",
-  "short_name": "Radar",
+  "name": "Crypto Handel Bitvavo",
+  "short_name": "Crypto Handel",
   "description": "Marktanalyse, Lernmodell und Kauf-/Verkaufssignale für Bitvavo",
   "start_url": "./",
   "scope": "./",

@@ -265,7 +265,8 @@ async function readCommands(){
         if(part){p.qty-=qq;p.cost=cost-cs;confirmations.push({kind:'part',mk,q:qq,rest:p.qty,sell,eur,net})}
         else{delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy,eur,net})}}
       else confirmations.push({kind:'unknown',mk});
-    }else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
+    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier)\b/i))autoCmds.push(x[1].toLowerCase());
+    else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
     else confirmations.push({kind:'help',t});
   }
 }
@@ -847,6 +848,121 @@ async function usdcTest(){
   st.usdcV=USDC_V;console.log(`USDC-Test fertig (${Math.round((Date.now()-t0)/1e3)} s)`);
 }
 
+/* ---------- Automatik: Top 5 mit Trendfilter 50 Tage gegen USDC ---------- */
+// Startkapital 1000 € → USDC. 5 % bleiben als Reserve in USDC, je 19 % für die 5 grössten Coins (Marktkapitalisierung laut
+// CoinGecko) mit liquidem USDC-Markt auf Bitvavo, solange der letzte Tagesschluss über dem 50-Tage-Durchschnitt liegt.
+// Einmal pro Tag nach Tagesschluss (UTC): verkaufen, was das Kriterium nicht mehr erfüllt, kaufen, was neu dazukommt,
+// Gewichte nachziehen, wenn ein Coin mehr als 5 Prozentpunkte vom Ziel abweicht. Nur Marktorders, Gebühr 0,05 %.
+// Der Bot führt ein eigenes Kassenbuch und handelt nur damit: andere Guthaben auf dem Konto bleiben unberührt.
+// Modus: «papier» (Standard, simuliert), «live» (echte Orders, nur mit API-Schlüssel), «pausiert».
+// Steuerung per ntfy-Befehlskanal: «auto status», «auto start», «auto stopp», «auto verkaufen», «auto papier».
+const AUTO={start_eur:1000,reserve:0.05,n:5,sma:50,band:0.05,minOrder:5,fee:0.0005,umtausch:0.001,operatorId:20261104};
+const BV_KEY=process.env.BITVAVO_KEY||'',BV_SECRET=process.env.BITVAVO_SECRET||'';
+const autoCmds=[];
+async function priv(method,pathQ,body){
+  const ts=Date.now(),b=body?JSON.stringify(body):'';
+  const sig=crypto.createHmac('sha256',BV_SECRET).update(ts+method+'/v2'+pathQ+b).digest('hex');
+  const r=await fetch(API+pathQ,{method,headers:{'Bitvavo-Access-Key':BV_KEY,'Bitvavo-Access-Signature':sig,'Bitvavo-Access-Timestamp':String(ts),'Bitvavo-Access-Window':'10000','Content-Type':'application/json'},body:b||undefined});
+  const t=await r.text();let o;try{o=JSON.parse(t)}catch(e){o={raw:t}}
+  if(!r.ok)throw new Error(`${method} ${pathQ.split('?')[0]} → ${r.status} ${o.errorCode??''} ${o.error??t.slice(0,120)}`);return o}
+const floorDec=(q,d)=>{const f=10**d;return Math.floor(q*f*(1+1e-12))/f};
+function autoNew(modus,cash){return{modus,start:Date.now(),start_usdc:cash,cash,pos:{},tag:null,trades:0,fees:0,kurve:[],log:[]}}
+async function autoBalance(){const b=await priv('GET','/balance');return Object.fromEntries(b.map(x=>[x.symbol,+x.available]))}
+// Live-Order ausführen und Kassenbuch nachführen; gibt die Zeile fürs Protokoll zurück
+async function autoOrder(A,c,side,{amount,amountQuote},px){
+  const mk=c+'-USDC';
+  if(A.modus!=='live'){   // Papier: zum Brief-/Geldkurs plus Gebühr
+    if(side==='buy'){const q=amountQuote*(1-AUTO.fee)/px;A.pos[c]=(A.pos[c]||0)+q;A.cash-=amountQuote;A.fees+=amountQuote*AUTO.fee;return{side,c,menge:q,usdc:amountQuote,preis:px}}
+    const v=amount*px,f=v*AUTO.fee;A.pos[c]-=amount;if(A.pos[c]<1e-12)delete A.pos[c];A.cash+=v-f;A.fees+=f;return{side,c,menge:amount,usdc:v-f,preis:px}}
+  const body={market:mk,side,orderType:'market',operatorId:AUTO.operatorId,...(amount!=null?{amount:String(amount)}:{amountQuote:amountQuote.toFixed(2)})};
+  const o=await priv('POST','/order',body);
+  const fa=+o.filledAmount||0,fq=+o.filledAmountQuote||0,fee=+o.feePaid||0,fc=o.feeCurrency;
+  if(side==='buy'){A.pos[c]=(A.pos[c]||0)+fa-(fc===c?fee:0);A.cash-=fq+(fc==='USDC'?fee:0)}
+  else{A.pos[c]=(A.pos[c]||0)-fa;if(A.pos[c]<1e-12)delete A.pos[c];A.cash+=fq-(fc==='USDC'?fee:0)}
+  A.fees+=fc==='USDC'?fee:fee*px;saveState();   // sofort sichern, damit ein Abbruch keine Doppel-Order auslöst
+  return{side,c,menge:fa,usdc:fq,preis:fa?fq/fa:px,status:o.status,orderId:o.orderId}}
+async function autoStep(tick24){
+  if(!st.auto)st.auto=autoNew('papier',AUTO.start_eur/(+tick24['USDC-EUR']?.last||0.9)*(1-AUTO.umtausch));
+  const MKD={};try{for(const x of await j(API+'/markets'))MKD[x.market]=x.quantityDecimals!=null?+x.quantityDecimals:6}catch(e){}
+  const A=st.auto,msgs=[],usdcEur=+tick24['USDC-EUR']?.last||0.9,hasKey=!!(BV_KEY&&BV_SECRET);
+  // Befehle
+  for(const cmd of autoCmds){
+    try{
+      if(cmd==='start'){
+        if(!hasKey){msgs.push(['Automatik: kein API-Schlüssel','Lege BITVAVO_KEY und BITVAVO_SECRET als GitHub-Secrets an (nur «Anzeigen» und «Handeln», ohne Auszahlung). Bis dahin läuft die Automatik auf Papier.']);continue}
+        if(A.modus==='live'){A.modus='live';msgs.push(['Automatik läuft bereits','Modus live.']);continue}
+        if(A.modus==='pausiert'&&A.live){A.modus='live';A.tag=null;msgs.push(['Automatik wieder live','Handel ab dem nächsten Lauf.']);continue}
+        const bal=await autoBalance(),eur=bal.EUR||0;
+        if(eur<AUTO.start_eur){msgs.push(['Automatik: zu wenig EUR',`Verfügbar ${eur.toFixed(2)} €, nötig ${AUTO.start_eur} €. Bitte einzahlen und «auto start» erneut senden.`]);continue}
+        const o=await priv('POST','/order',{market:'USDC-EUR',side:'buy',orderType:'market',amountQuote:String(AUTO.start_eur),operatorId:AUTO.operatorId});
+        const got=(+o.filledAmount||0)-(o.feeCurrency==='USDC'?+o.feePaid||0:0);
+        st.auto=autoNew('live',got);st.auto.live=true;st.auto.umtausch={eur:+o.filledAmountQuote||AUTO.start_eur,usdc:got,gebuehr:+o.feePaid||0,waehrung:o.feeCurrency};saveState();
+        msgs.push(['Automatik gestartet (live)',`${AUTO.start_eur} € in ${got.toFixed(2)} USDC umgetauscht. Die Coins werden beim nächsten Lauf gekauft.`]);
+      }else if(cmd==='stopp'||cmd==='stop'){A.modus='pausiert';msgs.push(['Automatik pausiert','Keine neuen Orders. Bestände bleiben liegen. «auto start» setzt fort, «auto verkaufen» verkauft alles in USDC.'])}
+      else if(cmd==='verkaufen'){const sold=[];if(A.live)A.modus='live';
+        for(const [c,q] of Object.entries({...A.pos})){const bk=await j(`${API}/ticker/book?market=${c}-USDC`);const d=MKD[c+'-USDC']??6;
+          let amt=floorDec(q,d);if(A.live){const bal=await autoBalance();amt=floorDec(Math.min(q,bal[c]||0),d)}
+          if(amt*(+bk.bid)>=AUTO.minOrder){const r=await autoOrder(A,c,'sell',{amount:amt},+bk.bid);sold.push(`${c} ${r.usdc.toFixed(2)} USDC`)}}
+        A.modus='pausiert';msgs.push(['Automatik: alles verkauft',(sold.join(', ')||'Keine Positionen')+`. Bestand ${A.cash.toFixed(2)} USDC, pausiert.`])}
+      else if(cmd==='papier'){if(A.live&&Object.keys(A.pos).length){msgs.push(['Automatik: erst verkaufen','Es gibt noch echte Positionen. Zuerst «auto verkaufen».']);continue}
+        st.auto=autoNew('papier',AUTO.start_eur/usdcEur*(1-AUTO.umtausch));msgs.push(['Automatik auf Papier','Neustart mit 1000 € (simuliert).'])}
+      else if(cmd==='status')A.statusPush=true;
+    }catch(e){msgs.push(['Automatik: Fehler bei «auto '+cmd+'»',String(e.message).slice(0,200)])}
+  }
+  const B=st.auto;
+  // Rangliste: Marktkapitalisierung (CoinGecko), nur Coins mit liquidem USDC-Markt auf Bitvavo
+  const liquid=markets.filter(m=>eligible(m)).map(m=>m.base);
+  let mcap={};try{const cg=await j(CG+'/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1');for(const x of cg){const s=x.symbol.toUpperCase();if(!(mcap[s]>=x.market_cap))mcap[s]=x.market_cap}}catch(e){console.warn('CoinGecko Marktkapitalisierung',e.message)}
+  const ranked=liquid.filter(b=>!STABLE.has(b)).sort((a,b)=>(mcap[b]||0)-(mcap[a]||0)||(markets.find(m=>m.base===b)?.vol30d||0)-(markets.find(m=>m.base===a)?.vol30d||0));
+  const top=ranked.slice(0,AUTO.n);
+  // Tagesschlüsse (USDC) und 50-Tage-Durchschnitt, nur abgeschlossene Tage
+  const today=Math.floor(Date.now()/DAY_MS)*DAY_MS,sig={};
+  for(const c of new Set([...top,...Object.keys(B.pos)])){try{const r=(await j(`${API}/${c}-USDC/candles?interval=1d&limit=${AUTO.sma+5}`)).map(k=>[+k[0],+k[4]]).filter(k=>k[0]<today).sort((a,b)=>a[0]-b[0]);
+    const cl=r.map(k=>k[1]),last=cl.at(-1),sma=cl.length>=AUTO.sma?cl.slice(-AUTO.sma).reduce((s,v)=>s+v,0)/AUTO.sma:NaN;
+    sig[c]={schluss:last,sma50:sma,ueber:last>sma,abstand_pct:sma?+((last/sma-1)*100).toFixed(2):null,tag:r.length?new Date(r.at(-1)[0]).toISOString().slice(0,10):null,top5:top.includes(c)}}catch(e){console.warn('Automatik Kerzen',c,e.message)}}
+  const books={};for(const c of new Set([...top,...Object.keys(B.pos)])){try{const b=await j(`${API}/ticker/book?market=${c}-USDC`);books[c]={bid:+b.bid,ask:+b.ask}}catch(e){}}
+  const value=()=>B.cash+Object.entries(B.pos).reduce((s,[c,q])=>s+q*(books[c]?.bid||sig[c]?.schluss||0),0);
+  const dayKey=new Date(today-DAY_MS).toISOString().slice(0,10),rows=[];
+  const canTrade=B.modus==='papier'||(B.modus==='live'&&hasKey);
+  if(canTrade&&B.tag!==dayKey&&Object.keys(sig).length){
+    B.tag=dayKey;saveState();                                         // Tag zuerst festhalten: höchstens ein Durchgang pro Tag
+    const want=new Set(top.filter(c=>sig[c]?.ueber)),w=(1-AUTO.reserve)/AUTO.n;
+    let bal=null;if(B.modus==='live')bal=await autoBalance();
+    try{
+      // 1) verkaufen: nicht mehr gewünscht oder übergewichtet
+      for(const [c,q] of Object.entries({...B.pos})){const bk=books[c];if(!bk)continue;const V=value(),cur=q*bk.bid,d=MKD[c+'-USDC']??6;
+        let amt=want.has(c)?(cur-V*w>V*AUTO.band?(cur-V*w)/bk.bid:0):q;if(B.modus==='live')amt=Math.min(amt,bal[c]||0);amt=floorDec(amt,d);
+        if(amt>0&&amt*bk.bid>=AUTO.minOrder)rows.push(await autoOrder(B,c,'sell',{amount:amt},bk.bid))}
+      // 2) kaufen: neu dazugekommen oder untergewichtet; Reserve bleibt
+      if(B.modus==='live')bal=await autoBalance();
+      for(const c of want){const bk=books[c];if(!bk)continue;const V=value(),cur=(B.pos[c]||0)*bk.bid;
+        if(B.pos[c]&&V*w-cur<=V*AUTO.band)continue;
+        let amt=Math.min(V*w-cur,B.cash-V*AUTO.reserve);if(B.modus==='live')amt=Math.min(amt,(bal.USDC||0)-0.01);
+        amt=Math.floor(amt*100)/100;if(amt>=AUTO.minOrder)rows.push(await autoOrder(B,c,'buy',{amountQuote:amt},bk.ask))}
+    }catch(e){msgs.push(['Automatik: Order-Fehler',String(e.message).slice(0,200)+'. Die Automatik ist pausiert.']);B.modus='pausiert'}
+    B.trades+=rows.length;
+    for(const r of rows)B.log.push({t:new Date().toISOString(),...r});B.log=B.log.slice(-300);
+    if(rows.length){appendCsv(`handel/auto-${iso(Date.now()).slice(0,7)}.csv`,['zeit_utc','modus','seite','coin','menge','preis_usdc','betrag_usdc','status'],rows.map(r=>[iso(Date.now()),B.modus,r.side==='buy'?'kauf':'verkauf',r.c,+r.menge.toFixed(8),+r.preis.toFixed(6),+r.usdc.toFixed(2),r.status||'']));
+      msgs.push([`Automatik (${B.modus==='live'?'live':'Papier'}): ${rows.length} Order${rows.length>1?'s':''}`,rows.map(r=>`${r.side==='buy'?'Kauf':'Verkauf'} ${r.c} ${r.usdc.toFixed(2)} USDC`).join(' · ')+` · Wert ${value().toFixed(2)} USDC`])}
+  }
+  // Abgleich mit dem echten Konto (nur live): Kassenbuch darf nie mehr enthalten als vorhanden
+  let abgleich=null;if(B.modus==='live'||B.live){try{const bal=await autoBalance();abgleich=Object.fromEntries(Object.entries(B.pos).map(([c,q])=>[c,{kassenbuch:+q.toFixed(8),konto:bal[c]||0,ok:(bal[c]||0)>=q*0.999}]));
+    abgleich.USDC={kassenbuch:+B.cash.toFixed(2),konto:bal.USDC||0,ok:(bal.USDC||0)>=B.cash*0.999-0.05};
+    if(Object.values(abgleich).some(x=>!x.ok))msgs.push(['Automatik: Bestand weicht ab','Auf dem Konto ist weniger vorhanden als im Kassenbuch. Bitte prüfen (manuell verkauft?).'])}catch(e){console.warn('Abgleich',e.message)}}
+  const V=value(),startEur=AUTO.start_eur;
+  const h=new Date().toISOString().slice(0,13).replace('T',' ');if(!B.kurve.length||B.kurve.at(-1).t!==h)B.kurve.push({t:h,usdc:+V.toFixed(2)});if(B.kurve.length>2000)B.kurve=B.kurve.filter((_,i)=>i%2===0);
+  const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
+    wert_usdc:+V.toFixed(2),wert_eur:+(V*usdcEur).toFixed(2),ergebnis_eur:+(V*usdcEur-startEur).toFixed(2),ergebnis_pct:+((V/B.start_usdc-1)*100).toFixed(2),
+    usdc:+B.cash.toFixed(2),reserve_pct:+(B.cash/V*100).toFixed(1),trades:B.trades,gebuehren_usdc:+B.fees.toFixed(2),letzter_handelstag:B.tag,
+    top5:top,positionen:Object.entries(B.pos).map(([c,q])=>({coin:c,menge:+q.toFixed(8),kurs:books[c]?.bid??null,wert_usdc:+(q*(books[c]?.bid||0)).toFixed(2),anteil_pct:+(q*(books[c]?.bid||0)/V*100).toFixed(1)})),
+    signale:sig,abgleich,regeln:{reserve_pct:AUTO.reserve*100,je_coin_pct:+((1-AUTO.reserve)/AUTO.n*100).toFixed(1),sma_tage:AUTO.sma,band_pp:AUTO.band*100,gebuehr_pct:AUTO.fee*100},
+    letzte_orders:B.log.slice(-20).reverse(),kurve:B.kurve.slice(-500)};
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/auto.json',JSON.stringify(out,null,1));
+  if(B.statusPush){delete B.statusPush;msgs.push([`Automatik: ${B.modus}`,`Wert ${V.toFixed(2)} USDC (${(V*usdcEur).toFixed(2)} €, ${out.ergebnis_pct>=0?'+':''}${out.ergebnis_pct}%). Top 5: ${top.map(c=>`${c}${sig[c]?.ueber?' ↑':' ↓'}`).join(', ')}. USDC ${B.cash.toFixed(2)}.`])}
+  for(const [t,b] of msgs)await push(t,b,4,'robot');
+  console.log(`Automatik (${B.modus}): Wert ${V.toFixed(2)} USDC, Top 5 ${top.map(c=>c+(sig[c]?.ueber?'↑':'↓')).join(' ')}, ${rows.length} Orders`);
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -908,6 +1024,7 @@ async function main(){
   st.ok=true;
   try{retro()}catch(e){console.warn('Rückblick',e.message)}
   await paperStep().catch(e=>console.warn('Papierhandel',e.message));
+  await autoStep(tick24).catch(e=>console.warn('Automatik',e.stack||e.message));
   logRun(buys);
   await trendTest().catch(e=>console.warn('Trendfolge-Test',e.stack||e.message));
   await usdcTest().catch(e=>console.warn('USDC-Test',e.stack||e.message));

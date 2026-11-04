@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Bitvavo Daytrade Radar</title>
+<title>Crypto Handel Bitvavo</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0c1220">
 <link rel="icon" href="icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Radar">
+<meta name="apple-mobile-web-app-title" content="Crypto Handel">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;600&family=Inter+Tight:wght@400;500;600&display=swap">
 <style>
@@ -159,6 +159,8 @@ a{color:var(--accent)}
 .calc b{font-family:var(--f-mono);font-weight:600}
 .pcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 @media (max-width:620px){.pcols{grid-template-columns:minmax(0,1fr)}}
+.pcols.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:620px){.pcols.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .pcol{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
 .pcol b{font:600 18px var(--f-mono)}
 .pcol .muted{font-size:12px}
@@ -172,7 +174,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 <div class="wrap">
   <header>
     <div>
-      <h1>Bitvavo Daytrade Radar</h1>
+      <h1>Crypto Handel Bitvavo</h1>
       <div class="status muted"><span class="dot" id="dot"></span><span id="stat">Lade Märkte…</span></div>
     </div>
     <div class="toolbar">
@@ -196,6 +198,12 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   <section class="panel" style="padding:12px 14px;display:flex;flex-direction:column;gap:8px">
     <span class="lbl">Trending auf CoinGecko · markiert = auf der Bitvavo-Beobachtungsliste (USDC-Märkte mit &gt; 50k $ am letzten Tag und &gt; 1 Mio. $ in 30 Tagen)</span>
     <div class="trend-list" id="trending"><span class="muted">lädt…</span></div>
+  </section>
+
+  <section class="panel" aria-label="Automatik" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Automatik · Top 5 mit 50-Tage-Filter</h2><span class="muted" id="autoTime" style="font-size:12px"></span></div>
+    <p class="hint">1000 € werden in USDC getauscht. 5 % bleiben als Reserve in USDC, je 19 % gehen in die 5 grössten Coins (Marktkapitalisierung) mit liquidem USDC-Markt, solange der letzte Tagesschluss über dem 50-Tage-Durchschnitt liegt. Der Bot prüft einmal täglich kurz nach Tagesschluss (01:00 Uhr, im Sommer 02:00 Uhr) und handelt mit Marktorders zu 0,05 % Gebühr. Steuerung per ntfy: «auto status», «auto start», «auto stopp», «auto verkaufen», «auto papier».</p>
+    <div id="auto"><div class="muted">Wird geladen…</div></div>
   </section>
 
   <section class="panel" aria-label="Beste Kandidaten" style="padding:12px 16px;display:flex;flex-direction:column;gap:4px">
@@ -543,7 +551,7 @@ async function run(force){
     if(full&&!(await loadBotModel()))await trainModel();
     results={};markets.forEach(m=>{if(data[m.market])results[m.market]=analyze(m,data[m.market])});
     journalUpdate();pfUpdate();checkAlerts();
-    loadPaper();
+    loadPaper();loadAuto();
     render();renderMood();renderCands();renderModel();renderJournal();renderPf();renderLog();
     if(!selected&&window.innerWidth>900){const best=sorted()[0];if(best)select(best.market)}else if(selected&&!$('#posBox')?.contains(document.activeElement))renderDetail();
     setStat(`${markets.filter(eligible).length} USDC-Märkte (>50k $/24h, >1 Mio. $/30T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
@@ -775,7 +783,7 @@ function initNotify(){
   $('#nTopic').addEventListener('change',e=>{nset.topic=e.target.value.trim().replace(/[^A-Za-z0-9_-]/g,'');e.target.value=nset.topic;saveN()});
   $('#nGen').addEventListener('click',()=>{nset.topic='bitvavo-radar-'+Math.random().toString(36).slice(2,10);$('#nTopic').value=nset.topic;saveN()});
   $('#nCopy').addEventListener('click',()=>{const t=$('#nTopic');navigator.clipboard?.writeText(t.value).catch(()=>{});t.select()});
-  $('#nTest').addEventListener('click',async()=>{const b=$('#nTest');b.textContent='Sende…';await notify({title:'Test: Bitvavo Radar',body:'Benachrichtigungen funktionieren.',kind:'buy'});b.textContent='Test gesendet';setTimeout(()=>b.textContent='Test senden',2500)});
+  $('#nTest').addEventListener('click',async()=>{const b=$('#nTest');b.textContent='Sende…';await notify({title:'Test: Crypto Handel Bitvavo',body:'Benachrichtigungen funktionieren.',kind:'buy'});b.textContent='Test gesendet';setTimeout(()=>b.textContent='Test senden',2500)});
   $('#nBrowser').addEventListener('click',async()=>{
     if(!('Notification' in window)){nStatus();return}
     if(nset.browser&&Notification.permission==='granted'){nset.browser=false}else{const p=await Notification.requestPermission();nset.browser=p==='granted'}
@@ -791,6 +799,36 @@ function initNotify(){
 
 /* ---------- Papierhandel: simulierter API-Bot gegen deine eigenen Trades ---------- */
 let paper=null;
+// Automatik (Top 5 mit 50-Tage-Filter): Stand aus dem Logbuch des Bots
+let auto=null;
+async function loadAuto(){try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json?'+Math.floor(Date.now()/6e4))}catch(e){}renderAuto()}
+let autoArm=null,autoNote='';
+// Befehl an den Bot; heikle Befehle brauchen ein zweites Tippen
+async function autoCmd(k){
+  if(['start','verkaufen','papier'].includes(k)&&autoArm!==k){autoArm=k;autoNote='';renderAuto();setTimeout(()=>{if(autoArm===k){autoArm=null;renderAuto()}},8000);return}
+  autoArm=null;const ok=await toBot('auto '+k);
+  autoNote=ok?`«auto ${k}» gesendet. Der Bot führt den Befehl beim nächsten Lauf aus (spätestens in 5 Minuten) und meldet sich per Push.`:'Senden fehlgeschlagen. Ist unter «Benachrichtigungen» der ntfy-Kanal eingetragen?';renderAuto()}
+function renderAuto(){
+  const el=$('#auto');if(!el)return;
+  if(!auto){el.innerHTML='<div class="muted">Noch keine Daten. Die Automatik startet beim nächsten Lauf des Bots.</div>';return}
+  const A=auto,f=d=>new Date(d).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  $('#autoTime').textContent=`Stand ${f(A.stand)}`;
+  const mod={papier:'Papier (simuliert)',live:'Live (echtes Geld)',pausiert:'Pausiert'}[A.modus]||A.modus;
+  const head=`<div class="pcols four"><div class="pcol"><span class="lbl">Modus</span><b>${mod}</b><span class="muted">${A.schluessel?'API-Schlüssel vorhanden':'kein API-Schlüssel hinterlegt'}</span></div>
+    <div class="pcol"><span class="lbl">Wert</span><b>${A.wert_usdc.toFixed(2)} $</b><span class="muted">${A.wert_eur.toFixed(2)} € · Start ${A.start_eur} €</span></div>
+    <div class="pcol"><span class="lbl">Ergebnis</span><b class="${A.ergebnis_pct>=0?'up':'down'}">${pct(A.ergebnis_pct)}</b><span class="muted">${A.ergebnis_eur>=0?'+':''}${A.ergebnis_eur.toFixed(2)} € · ${A.trades} Orders · Gebühren ${A.gebuehren_usdc.toFixed(2)} $</span></div>
+    <div class="pcol"><span class="lbl">USDC</span><b>${A.usdc.toFixed(2)} $</b><span class="muted">${A.reserve_pct}% des Werts</span></div></div>`;
+  const pos=Object.fromEntries((A.positionen||[]).map(p=>[p.coin,p]));
+  const coins=[...new Set([...(A.top5||[]),...Object.keys(pos)])];
+  const rows=coins.map(c=>{const s=A.signale?.[c]||{},p=pos[c];return `<div class="jrow" style="grid-template-columns:56px 1fr 1fr 70px">
+    <b>${c}</b><span class="num ${s.ueber?'up':'down'}">${s.ueber?'über':'unter'} Ø50 ${s.abstand_pct!=null?`(${s.abstand_pct>0?'+':''}${s.abstand_pct}%)`:''}</span>
+    <span class="num muted">${p?`${p.wert_usdc.toFixed(2)} $ · ${p.anteil_pct}%`:'kein Bestand'}</span><span class="tag ${s.top5?(s.ueber?'win':'open'):'loss'}">${s.top5?(s.ueber?'halten':'USDC'):'nicht Top 5'}</span></div>`}).join('');
+  const ord=(A.letzte_orders||[]).slice(0,6).map(o=>`<div class="muted" style="font-size:12px">${f(o.t)} · ${o.side==='buy'?'Kauf':'Verkauf'} ${o.c} ${o.usdc.toFixed(2)} $ zu ${fmtP(o.preis)} $</div>`).join('');
+  el.innerHTML=head+`<div style="display:flex;flex-direction:column;gap:2px;margin-top:10px">${rows}</div>`+(ord?`<div style="margin-top:10px;display:flex;flex-direction:column;gap:2px"><span class="lbl">Letzte Orders</span>${ord}</div>`:'')+
+    `<div class="posform" style="margin-top:10px;flex-wrap:wrap" id="autoBtns">${[['status','Status'],['start',A.modus==='live'?'Live':'Live starten'],['stopp','Pausieren'],['verkaufen','Alles verkaufen'],['papier','Papier neu starten']].map(([k,l])=>`<button type="button" data-auto="${k}"${autoArm===k?' class="primary"':''}>${autoArm===k?'Wirklich? Nochmals tippen':l}</button>`).join('')}</div><div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div>`+
+    `<div class="muted" style="font-size:12px;margin-top:8px">Letzter Handelstag ${A.letzter_handelstag||'–'} · Regeln: ${A.regeln.reserve_pct}% Reserve, ${A.regeln.je_coin_pct}% je Coin, Durchschnitt ${A.regeln.sma_tage} Tage, Band ±${A.regeln.band_pp} Prozentpunkte</div>`;
+  el.querySelectorAll('[data-auto]').forEach(b=>b.addEventListener('click',()=>autoCmd(b.dataset.auto)));
+}
 async function loadPaper(){try{paper=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/papier.json?'+Math.floor(Date.now()/6e4))}catch(e){}renderPaper()}
 function spark(pts,key,lo,hi,w,h,col){if(pts.length<2)return'';const x=i=>(i/(pts.length-1)*w).toFixed(1),y=v=>(h-2-(v-lo)/((hi-lo)||1)*(h-4)).toFixed(1);
   return `<polyline fill="none" stroke="var(${col})" stroke-width="1.6" points="${pts.map((p,i)=>x(i)+','+y(p[key])).join(' ')}"/>`}
