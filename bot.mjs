@@ -683,7 +683,7 @@ const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
 /* ---------- Trendfolge-Test auf Tageskerzen (einmalig je Version): nur kaufen und halten, kein Hebel, kein Short ---------- */
 // Feste, vorab gewählte Regeln (keine Optimierung): Durchschnitt 50, 100 und 200 Tage werden alle gezeigt.
 // Kauf/Verkauf jeweils zum Eröffnungskurs des Folgetags, Kosten 0,25 % plus halber Spread je Coin.
-const TREND_V=1;
+const TREND_V=2;
 async function trendTest(){
   if(st.trendV===TREND_V)return;const t0=Date.now(),D=864e5,now=Date.now(),start=Date.UTC(2019,0,1),today=Math.floor(now/D)*D;
   const tk=await j(API+'/ticker/24h');
@@ -696,10 +696,11 @@ async function trendTest(){
   // gemeinsame Tagesachse ab dem ersten Bitcoin-Tag
   const B=raw['BTC-EUR'],t0d=Math.min(...B.keys()),days=[];for(let t=t0d;t<today;t+=D)days.push(t);
   const A={};for(const [mk,m] of Object.entries(raw)){const o=[],c=[],ve=[];for(const t of days){const x=m.get(t);o.push(x?x.o:NaN);c.push(x?x.c:NaN);ve.push(x?x.v*x.c:NaN)}
-    const sma={};for(const N of [50,100,200]){const a=new Array(days.length).fill(NaN);let s=0,n=0;for(let i=0;i<days.length;i++){if(c[i]===c[i]){s+=c[i];n++}else{s=0;n=0}
-      if(n>N){s-=c[i-N];n=N}if(n===N)a[i]=s/N}sma[N]=a}
+    const cf=[];let last=NaN;for(let i=0;i<days.length;i++){if(c[i]===c[i])last=c[i];cf.push(last)}   // letzter bekannter Kurs, falls ein Tag fehlt
+    const sma={};for(const N of [50,100,200]){const a=new Array(days.length).fill(NaN);let s=0,n=0;for(let i=0;i<days.length;i++){if(cf[i]!==cf[i])continue;s+=cf[i];n++;
+      if(n>N){s-=cf[i-N];n=N}if(n===N)a[i]=s/N}sma[N]=a}
     const v30=new Array(days.length).fill(0);let s=0;for(let i=0;i<days.length;i++){s+=ve[i]===ve[i]?ve[i]:0;if(i>=30)s-=ve[i-30]===ve[i-30]?ve[i-30]:0;v30[i]=s}
-    A[mk]={o,c,ve,sma,v30}}
+    A[mk]={o,c,cf,ve,sma,v30}}
   const i0=days.findIndex((_,i)=>A['BTC-EUR'].sma[200][i]===A['BTC-EUR'].sma[200][i]);
   const top10=i=>Object.entries(A).filter(([mk,a])=>a.ve[i]>=MIN_VOL&&a.v30[i]>=MIN_VOL30&&a.c[i]===a.c[i]).sort((x,y)=>y[1].v30[i]-x[1].v30[i]).slice(0,10).map(x=>x[0]);
   // Simulation: wants(i) liefert die gewünschten Coins für den nächsten Tag; Gewicht je Coin = w (1 bei Bitcoin, 0,1 bei Top 10)
@@ -708,19 +709,19 @@ async function trendTest(){
     for(let i=i0;i<days.length;i++){
       // Ausführung zum Eröffnungskurs (Entscheid vom Vortag)
       if(i>i0&&decideDay(i-1)){const want=new Set(wants(i-1));
-        for(const mk of Object.keys(hold))if(!want.has(mk)){const px=A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].c[i-1];const val=hold[mk]*px,f=val*cost(mk);cash+=val-f;fees+=f;trades++;delete hold[mk]}
-        let value=cash;for(const [mk,q] of Object.entries(hold))value+=q*(A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].c[i-1]);
+        for(const mk of Object.keys(hold))if(!want.has(mk)){const px=A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].cf[i-1];const val=hold[mk]*px,f=val*cost(mk);cash+=val-f;fees+=f;trades++;delete hold[mk]}
+        let value=cash;for(const [mk,q] of Object.entries(hold))value+=q*(A[mk].o[i]===A[mk].o[i]?A[mk].o[i]:A[mk].cf[i-1]);
         for(const mk of want)if(!hold[mk]&&A[mk].o[i]===A[mk].o[i]){const amt=Math.min(cash,value*w);if(amt<1)continue;const f=amt*cost(mk);hold[mk]=(amt-f)/A[mk].o[i];cash-=amt;fees+=f;trades++}}
-      let v=cash;for(const [mk,q] of Object.entries(hold)){const px=A[mk].c[i]===A[mk].c[i]?A[mk].c[i]:A[mk].o[i];v+=q*(px===px?px:0)}
+      let v=cash;for(const [mk,q] of Object.entries(hold)){const px=A[mk].cf[i];v+=q*(px===px?px:0)}
       if(Object.keys(hold).length)inv++;eq.push(v)}
     return{name,eq,fees,trades,anteil_investiert:inv/eq.length}}
   const mon=i=>new Date(days[i]).getUTCDay()===1,first=i=>new Date(days[i]).getUTCDate()===1;
   const S=[sim('Bitcoin halten',1,i=>i===i0,()=>['BTC-EUR'])];
-  for(const N of [50,100,200])S.push(sim(`Bitcoin mit Trendfilter ${N} Tage`,1,()=>true,i=>A['BTC-EUR'].c[i]>A['BTC-EUR'].sma[N][i]?['BTC-EUR']:[]));
+  for(const N of [50,100,200])S.push(sim(`Bitcoin mit Trendfilter ${N} Tage`,1,()=>true,i=>A['BTC-EUR'].cf[i]>A['BTC-EUR'].sma[N][i]?['BTC-EUR']:[]));
   S.push(sim('Top 10 halten (monatlich neu gewählt)',0.1,i=>i===i0||first(i),top10));
-  for(const N of [50,100,200])S.push(sim(`Top 10 mit Trendfilter ${N} Tage (wöchentlich)`,0.1,i=>i===i0||mon(i),i=>top10(i).filter(mk=>A[mk].c[i]>A[mk].sma[N][i])));
+  for(const N of [50,100,200])S.push(sim(`Top 10 mit Trendfilter ${N} Tage (wöchentlich)`,0.1,i=>i===i0||mon(i),i=>top10(i).filter(mk=>A[mk].cf[i]>A[mk].sma[N][i])));
   // Sparplan: jeden Monatsersten 100 € in Bitcoin
-  let q=0,inv=0;const dca=[];for(let i=i0;i<days.length;i++){if(i===i0||first(i)){const px=A['BTC-EUR'].o[i];q+=100*(1-cost('BTC-EUR'))/px;inv+=100}dca.push({t:days[i],wert:q*A['BTC-EUR'].c[i],eingezahlt:inv})}
+  let q=0,inv=0;const dca=[];for(let i=i0;i<days.length;i++){if(i===i0||first(i)){const px=A['BTC-EUR'].o[i]===A['BTC-EUR'].o[i]?A['BTC-EUR'].o[i]:A['BTC-EUR'].cf[i-1];q+=100*(1-cost('BTC-EUR'))/px;inv+=100}dca.push({t:days[i],wert:q*A['BTC-EUR'].cf[i],eingezahlt:inv})}
   // Kennzahlen
   const yrs=(days.length-1-i0)/365,stat=s=>{const e=s.eq;let pk=e[0],dd=0;for(const v of e){pk=Math.max(pk,v);dd=Math.min(dd,v/pk-1)}
     const jahr={};for(let k=0;k<e.length;k++){const y=new Date(days[i0+k]).getUTCFullYear();(jahr[y]||(jahr[y]={a:k>0?e[k-1]:e[0]})).e=e[k]}
