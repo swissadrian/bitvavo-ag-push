@@ -82,12 +82,15 @@ Jede Woche prüft der Bot jede Merkmalgruppe einzeln: einmal mit, einmal ohne, a
 
 Einmalig rechnet der Bot nach, wie langsame Trendfolge seit 2019 abgeschnitten hätte. Er handelt nur Käufe, ohne Hebel und ohne Short. Gekauft und verkauft wird zum Eröffnungskurs des Folgetags. Die Kosten betragen 0,25 % plus den halben Spread je Coin. Verglichen werden:
 - **Bitcoin halten**
-- **Bitcoin mit Trendfilter:** halten, solange der Tagesschluss über dem Durchschnitt der letzten 50, 100 bzw. 200 Tage liegt, sonst Euro.
+- **Bitcoin mit Trendfilter:** halten, solange der Tagesschluss über dem Durchschnitt der letzten 25, 50 bzw. 100 Tage liegt, sonst Euro.
+- **Top 5 mit Trendfilter:** die 5 Coins mit dem meisten Umsatz, wöchentlich geprüft, 20 % pro Coin. Durchschnitt 25, 50 bzw. 100 Tage.
 - **Top 10 halten:** die 10 Coins mit dem meisten Umsatz, jeden Monat neu gewählt.
-- **Top 10 mit Trendfilter:** dieselben 10 Coins mit Trendfilter, wöchentlich geprüft, 10 % pro Coin.
+- **Top 10 mit Trendfilter:** dieselben 10 Coins, wöchentlich geprüft, 10 % pro Coin. Durchschnitt 50, 100 bzw. 200 Tage.
+
+Jede Strategie wird zweimal gerechnet: mit den Gebühren der EUR-Märkte (0,25 %) und mit denen der USDC-Märkte (0,05 %). Der Wechselkurs EUR/USD ist dabei nicht berücksichtigt.
 - **Sparplan:** jeden Monat 100 € in Bitcoin.
 
-Alle drei Durchschnitte werden gezeigt und nicht der beste ausgewählt, damit das Ergebnis nicht geschönt ist. Ergebnis in `analyse/trendtest.json`. Coins, die Bitvavo inzwischen gestrichen hat, fehlen in der Rechnung. Das macht das Ergebnis eher etwas zu gut.
+Alle Durchschnitte werden gezeigt und nicht der beste ausgewählt, damit das Ergebnis nicht geschönt ist. Ergebnis in `analyse/trendtest.json`. Coins, die Bitvavo inzwischen gestrichen hat, fehlen in der Rechnung. Das macht das Ergebnis eher etwas zu gut.
 
 ## Logbuch
 
