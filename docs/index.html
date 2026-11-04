@@ -160,6 +160,13 @@ a{color:var(--accent)}
 .pcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 @media (max-width:620px){.pcols{grid-template-columns:minmax(0,1fr)}}
 .pcols.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:12px 10px;font-weight:600;background:transparent;color:var(--muted);min-height:44px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--chip);color:var(--fg)}
+.seg button.on.live{background:color-mix(in srgb,var(--down) 16%,transparent);color:var(--down)}
+.seg button:disabled{opacity:.5;cursor:not-allowed}
+
 @media (max-width:620px){.pcols.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .pcol{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
 .pcol b{font:600 18px var(--f-mono)}
@@ -202,7 +209,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 
   <section class="panel" aria-label="Automatik" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Automatik · Top 5 mit 50-Tage-Filter</h2><span class="muted" id="autoTime" style="font-size:12px"></span></div>
-    <p class="hint">1000 € werden in USDC getauscht. 5 % bleiben als Reserve in USDC, je 19 % gehen in die 5 grössten Coins (Marktkapitalisierung) mit liquidem USDC-Markt, solange der letzte Tagesschluss über dem 50-Tage-Durchschnitt liegt. Der Bot prüft einmal täglich kurz nach Tagesschluss (01:00 Uhr, im Sommer 02:00 Uhr) und handelt mit Marktorders zu 0,05 % Gebühr. Steuerung per ntfy: «auto status», «auto start», «auto stopp», «auto verkaufen», «auto papier».</p>
+    <p class="hint">1000 € werden in USDC getauscht. 5 % bleiben als Reserve in USDC, je 19 % gehen in die 5 grössten Coins (Marktkapitalisierung) mit liquidem USDC-Markt, solange der letzte Tagesschluss über dem 50-Tage-Durchschnitt liegt. Der Bot prüft einmal täglich kurz nach Tagesschluss (01:00 Uhr, im Sommer 02:00 Uhr) und handelt mit Marktorders zu 0,05 % Gebühr. Unten umschalten zwischen Demo (nur simuliert) und Live (echte Orders über die Bitvavo-API).</p>
     <div id="auto"><div class="muted">Wird geladen…</div></div>
   </section>
 
@@ -803,17 +810,36 @@ let paper=null;
 let auto=null;
 async function loadAuto(){try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json?'+Math.floor(Date.now()/6e4))}catch(e){}renderAuto()}
 let autoArm=null,autoNote='';
+// Umschalter Demo / Live und Zusatzknöpfe; heikle Schritte brauchen ein zweites Tippen
+function autoSwitch(A){
+  const live=A.modus==='live',paused=A.modus==='pausiert',hatPos=(A.positionen||[]).length>0;
+  const b=(k,l,cls='')=>`<button type="button" data-auto="${k}" class="${autoArm===k?'primary':cls}">${autoArm===k?'Wirklich? Nochmals tippen':l}</button>`;
+  const seg=`<div class="seg" role="group" aria-label="Betriebsart">
+      <button type="button" class="${!live?'on':''}" data-auto="${live||paused?'demo':'nix'}" aria-pressed="${!live}">${autoArm==='demo'?'Wirklich? Nochmals tippen':(live||paused)&&hatPos?'Demo (verkauft alles in USDC)':'Demo'}</button>
+      <button type="button" class="${live?'on live':''}" data-auto="${live?'nix':'start'}" aria-pressed="${live}"${!A.schluessel&&!live?' disabled':''}>${autoArm==='start'?'Wirklich? Nochmals tippen':live?'Live':paused&&A.live_konto?'Live fortsetzen':'Live starten'}</button></div>`;
+  const info=live?'Live: Der Bot handelt mit echtem Geld über die Bitvavo-API.'
+    :paused?'Pausiert: keine neuen Orders, Bestände bleiben liegen.'
+    :A.schluessel?'Demo: Alles wird nur simuliert. Die API wird nicht benutzt, bis du auf «Live starten» tippst (zweimal). Dann tauscht der Bot 1000 € in USDC und kauft nach den Regeln.'
+    :'Demo: Alles wird nur simuliert. «Live starten» wird erst möglich, wenn die API-Schlüssel als GitHub-Secrets hinterlegt sind.';
+  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${seg}<div class="muted" style="font-size:12px">${info}</div>
+    <div class="posform" style="flex-wrap:wrap">${b('status','Status per Push')}${live?b('stopp','Pausieren'):''}${(live||paused)&&hatPos?b('verkaufen','Alles in USDC verkaufen'):''}</div>
+    <div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div></div>`;
+}
 // Befehl an den Bot; heikle Befehle brauchen ein zweites Tippen
 async function autoCmd(k){
-  if(['start','verkaufen','papier'].includes(k)&&autoArm!==k){autoArm=k;autoNote='';renderAuto();setTimeout(()=>{if(autoArm===k){autoArm=null;renderAuto()}},8000);return}
-  autoArm=null;const ok=await toBot('auto '+k);
-  autoNote=ok?`«auto ${k}» gesendet. Der Bot führt den Befehl beim nächsten Lauf aus (spätestens in 5 Minuten) und meldet sich per Push.`:'Senden fehlgeschlagen. Ist unter «Benachrichtigungen» der ntfy-Kanal eingetragen?';renderAuto()}
+  if(k==='nix')return;
+  if(['start','verkaufen','demo'].includes(k)&&autoArm!==k){autoArm=k;autoNote='';renderAuto();setTimeout(()=>{if(autoArm===k){autoArm=null;renderAuto()}},8000);return}
+  autoArm=null;
+  // Zurück zu Demo: bei Live-Beständen zuerst alles verkaufen, dann auf Papier
+  let ok=true;if(k==='demo'){const hatPos=(auto?.positionen||[]).length>0;if(hatPos)ok=await toBot('auto verkaufen');if(ok)ok=await toBot('auto papier');k='papier'}
+  else ok=await toBot('auto '+k);
+  autoNote=ok?`Umschaltung «${({start:'Live starten',papier:'Demo',stopp:'Pausieren',verkaufen:'Alles verkaufen',status:'Status'})[k]||k}» gesendet. Der Bot führt sie beim nächsten Lauf aus (spätestens in 5 Minuten) und bestätigt per Push. Danach zeigt die App den neuen Stand.`:'Senden fehlgeschlagen. Ist unter «Benachrichtigungen» der ntfy-Kanal eingetragen?';renderAuto()}
 function renderAuto(){
   const el=$('#auto');if(!el)return;
   if(!auto){el.innerHTML='<div class="muted">Noch keine Daten. Die Automatik startet beim nächsten Lauf des Bots.</div>';return}
   const A=auto,f=d=>new Date(d).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
   $('#autoTime').textContent=`Stand ${f(A.stand)}`;
-  const mod={papier:'Papier (simuliert)',live:'Live (echtes Geld)',pausiert:'Pausiert'}[A.modus]||A.modus;
+  const mod={papier:'Demo (simuliert)',live:'Live (echtes Geld)',pausiert:'Pausiert'}[A.modus]||A.modus;
   const head=`<div class="pcols four"><div class="pcol"><span class="lbl">Modus</span><b>${mod}</b><span class="muted">${A.schluessel?'API-Schlüssel vorhanden':'kein API-Schlüssel hinterlegt'}</span></div>
     <div class="pcol"><span class="lbl">Wert</span><b>${A.wert_usdc.toFixed(2)} $</b><span class="muted">${A.wert_eur.toFixed(2)} € · Start ${A.start_eur} €</span></div>
     <div class="pcol"><span class="lbl">Ergebnis</span><b class="${A.ergebnis_pct>=0?'up':'down'}">${pct(A.ergebnis_pct)}</b><span class="muted">${A.ergebnis_eur>=0?'+':''}${A.ergebnis_eur.toFixed(2)} € · ${A.trades} Orders · Gebühren ${A.gebuehren_usdc.toFixed(2)} $</span></div>
@@ -825,7 +851,7 @@ function renderAuto(){
     <span class="num muted">${p?`${p.wert_usdc.toFixed(2)} $ · ${p.anteil_pct}%`:'kein Bestand'}</span><span class="tag ${s.top5?(s.ueber?'win':'open'):'loss'}">${s.top5?(s.ueber?'halten':'USDC'):'nicht Top 5'}</span></div>`}).join('');
   const ord=(A.letzte_orders||[]).slice(0,6).map(o=>`<div class="muted" style="font-size:12px">${f(o.t)} · ${o.side==='buy'?'Kauf':'Verkauf'} ${o.c} ${o.usdc.toFixed(2)} $ zu ${fmtP(o.preis)} $</div>`).join('');
   el.innerHTML=head+`<div style="display:flex;flex-direction:column;gap:2px;margin-top:10px">${rows}</div>`+(ord?`<div style="margin-top:10px;display:flex;flex-direction:column;gap:2px"><span class="lbl">Letzte Orders</span>${ord}</div>`:'')+
-    `<div class="posform" style="margin-top:10px;flex-wrap:wrap" id="autoBtns">${[['status','Status'],['start',A.modus==='live'?'Live':'Live starten'],['stopp','Pausieren'],['verkaufen','Alles verkaufen'],['papier','Papier neu starten']].map(([k,l])=>`<button type="button" data-auto="${k}"${autoArm===k?' class="primary"':''}>${autoArm===k?'Wirklich? Nochmals tippen':l}</button>`).join('')}</div><div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div>`+
+    autoSwitch(A)+
     `<div class="muted" style="font-size:12px;margin-top:8px">Letzter Handelstag ${A.letzter_handelstag||'–'} · Regeln: ${A.regeln.reserve_pct}% Reserve, ${A.regeln.je_coin_pct}% je Coin, Durchschnitt ${A.regeln.sma_tage} Tage, Band ±${A.regeln.band_pp} Prozentpunkte</div>`;
   el.querySelectorAll('[data-auto]').forEach(b=>b.addEventListener('click',()=>autoCmd(b.dataset.auto)));
 }

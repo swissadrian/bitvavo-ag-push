@@ -265,7 +265,7 @@ async function readCommands(){
         if(part){p.qty-=qq;p.cost=cost-cs;confirmations.push({kind:'part',mk,q:qq,rest:p.qty,sell,eur,net})}
         else{delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy,eur,net})}}
       else confirmations.push({kind:'unknown',mk});
-    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier)\b/i))autoCmds.push(x[1].toLowerCase());
+    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier|demo)\b/i))autoCmds.push(x[1].toLowerCase()==='demo'?'papier':x[1].toLowerCase());
     else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
     else confirmations.push({kind:'help',t});
   }
@@ -889,7 +889,7 @@ async function autoStep(tick24){
   for(const cmd of autoCmds){
     try{
       if(cmd==='start'){
-        if(!hasKey){msgs.push(['Automatik: kein API-Schlüssel','Lege BITVAVO_KEY und BITVAVO_SECRET als GitHub-Secrets an (nur «Anzeigen» und «Handeln», ohne Auszahlung). Bis dahin läuft die Automatik auf Papier.']);continue}
+        if(!hasKey){msgs.push(['Automatik: kein API-Schlüssel','Lege BITVAVO_KEY und BITVAVO_SECRET als GitHub-Secrets an (nur «Anzeigen» und «Handeln», ohne Auszahlung). Bis dahin bleibt die Automatik im Demo-Modus.']);continue}
         if(A.modus==='live'){A.modus='live';msgs.push(['Automatik läuft bereits','Modus live.']);continue}
         if(A.modus==='pausiert'&&A.live){A.modus='live';A.tag=null;msgs.push(['Automatik wieder live','Handel ab dem nächsten Lauf.']);continue}
         const bal=await autoBalance(),eur=bal.EUR||0;
@@ -905,7 +905,7 @@ async function autoStep(tick24){
           if(amt*(+bk.bid)>=AUTO.minOrder){const r=await autoOrder(A,c,'sell',{amount:amt},+bk.bid);sold.push(`${c} ${r.usdc.toFixed(2)} USDC`)}}
         A.modus='pausiert';msgs.push(['Automatik: alles verkauft',(sold.join(', ')||'Keine Positionen')+`. Bestand ${A.cash.toFixed(2)} USDC, pausiert.`])}
       else if(cmd==='papier'){if(A.live&&Object.keys(A.pos).length){msgs.push(['Automatik: erst verkaufen','Es gibt noch echte Positionen. Zuerst «auto verkaufen».']);continue}
-        st.auto=autoNew('papier',AUTO.start_eur/usdcEur*(1-AUTO.umtausch));msgs.push(['Automatik auf Papier','Neustart mit 1000 € (simuliert).'])}
+        const warLive=!!A.live;st.auto=autoNew('papier',AUTO.start_eur/usdcEur*(1-AUTO.umtausch));msgs.push(['Automatik im Demo-Modus',(warLive?`Live beendet. Die ${A.cash.toFixed(2)} USDC bleiben auf deinem Bitvavo-Konto. `:'')+'Ab jetzt wird nur simuliert (Start mit 1000 €). Die API wird nicht mehr benutzt.'])}
       else if(cmd==='status')A.statusPush=true;
     }catch(e){msgs.push(['Automatik: Fehler bei «auto '+cmd+'»',String(e.message).slice(0,200)])}
   }
@@ -943,7 +943,7 @@ async function autoStep(tick24){
     B.trades+=rows.length;
     for(const r of rows)B.log.push({t:new Date().toISOString(),...r});B.log=B.log.slice(-300);
     if(rows.length){appendCsv(`handel/auto-${iso(Date.now()).slice(0,7)}.csv`,['zeit_utc','modus','seite','coin','menge','preis_usdc','betrag_usdc','status'],rows.map(r=>[iso(Date.now()),B.modus,r.side==='buy'?'kauf':'verkauf',r.c,+r.menge.toFixed(8),+r.preis.toFixed(6),+r.usdc.toFixed(2),r.status||'']));
-      msgs.push([`Automatik (${B.modus==='live'?'live':'Papier'}): ${rows.length} Order${rows.length>1?'s':''}`,rows.map(r=>`${r.side==='buy'?'Kauf':'Verkauf'} ${r.c} ${r.usdc.toFixed(2)} USDC`).join(' · ')+` · Wert ${value().toFixed(2)} USDC`])}
+      msgs.push([`Automatik (${B.modus==='live'?'live':'Demo'}): ${rows.length} Order${rows.length>1?'s':''}`,rows.map(r=>`${r.side==='buy'?'Kauf':'Verkauf'} ${r.c} ${r.usdc.toFixed(2)} USDC`).join(' · ')+` · Wert ${value().toFixed(2)} USDC`])}
   }
   // Abgleich mit dem echten Konto (nur live): Kassenbuch darf nie mehr enthalten als vorhanden
   let abgleich=null;if(B.modus==='live'||B.live){try{const bal=await autoBalance();abgleich=Object.fromEntries(Object.entries(B.pos).map(([c,q])=>[c,{kassenbuch:+q.toFixed(8),konto:bal[c]||0,ok:(bal[c]||0)>=q*0.999}]));
@@ -951,7 +951,7 @@ async function autoStep(tick24){
     if(Object.values(abgleich).some(x=>!x.ok))msgs.push(['Automatik: Bestand weicht ab','Auf dem Konto ist weniger vorhanden als im Kassenbuch. Bitte prüfen (manuell verkauft?).'])}catch(e){console.warn('Abgleich',e.message)}}
   const V=value(),startEur=AUTO.start_eur;
   const h=new Date().toISOString().slice(0,13).replace('T',' ');if(!B.kurve.length||B.kurve.at(-1).t!==h)B.kurve.push({t:h,usdc:+V.toFixed(2)});if(B.kurve.length>2000)B.kurve=B.kurve.filter((_,i)=>i%2===0);
-  const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
+  const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,live_konto:!!B.live,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
     wert_usdc:+V.toFixed(2),wert_eur:+(V*usdcEur).toFixed(2),ergebnis_eur:+(V*usdcEur-startEur).toFixed(2),ergebnis_pct:+((V/B.start_usdc-1)*100).toFixed(2),
     usdc:+B.cash.toFixed(2),reserve_pct:+(B.cash/V*100).toFixed(1),trades:B.trades,gebuehren_usdc:+B.fees.toFixed(2),letzter_handelstag:B.tag,
     top5:top,positionen:Object.entries(B.pos).map(([c,q])=>({coin:c,menge:+q.toFixed(8),kurs:books[c]?.bid??null,wert_usdc:+(q*(books[c]?.bid||0)).toFixed(2),anteil_pct:+(q*(books[c]?.bid||0)/V*100).toFixed(1)})),
@@ -960,7 +960,7 @@ async function autoStep(tick24){
   fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/auto.json',JSON.stringify(out,null,1));
   if(B.statusPush){delete B.statusPush;msgs.push([`Automatik: ${B.modus}`,`Wert ${V.toFixed(2)} USDC (${(V*usdcEur).toFixed(2)} €, ${out.ergebnis_pct>=0?'+':''}${out.ergebnis_pct}%). Top 5: ${top.map(c=>`${c}${sig[c]?.ueber?' ↑':' ↓'}`).join(', ')}. USDC ${B.cash.toFixed(2)}.`])}
   for(const [t,b] of msgs)await push(t,b,4,'robot');
-  console.log(`Automatik (${B.modus}): Wert ${V.toFixed(2)} USDC, Top 5 ${top.map(c=>c+(sig[c]?.ueber?'↑':'↓')).join(' ')}, ${rows.length} Orders`);
+  console.log(`Automatik (${B.modus==='papier'?'Demo':B.modus}): Wert ${V.toFixed(2)} USDC, Top 5 ${top.map(c=>c+(sig[c]?.ueber?'↑':'↓')).join(' ')}, ${rows.length} Orders`);
 }
 
 /* ---------- Hauptlauf ---------- */

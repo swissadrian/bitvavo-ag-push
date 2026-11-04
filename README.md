@@ -140,7 +140,7 @@ Befehle an den Bot (ntfy-Kanal mit `-cmd`): `kauf BTC-USDC 71500 0.02`, `verkauf
 **Kassenbuch:** Der Bot führt ein eigenes Kassenbuch und handelt nur damit. Andere Guthaben auf dem Konto rührt er nicht an. Jeden Lauf gleicht er das Kassenbuch mit dem Konto ab.
 
 **Modi:**
-- **papier** (Standard): simuliert, ohne Schlüssel.
+- **Demo** (`papier`, Standard): nur simuliert. Die API wird nicht benutzt, auch wenn Schlüssel hinterlegt sind.
 - **live:** echte Orders.
 - **pausiert**
 
@@ -157,7 +157,7 @@ Befehle an den Bot (ntfy-Kanal mit `-cmd`): `kauf BTC-USDC 71500 0.02`, `verkauf
 1. Bei Bitvavo unter Einstellungen → API einen Schlüssel anlegen. Rechte: **Anzeigen** und **Handeln**, **nicht Auszahlen**.
 2. Im Repository unter Settings → Secrets and variables → Actions zwei Secrets anlegen: `BITVAVO_KEY` und `BITVAVO_SECRET`.
 3. Mindestens 1000 € auf Bitvavo einzahlen.
-4. In der App «Live starten» zweimal tippen oder `auto start` senden. Die Secrets gelten ab dem nächsten Durchgang des Bots (spätestens nach 6 Stunden; sofort, wenn man den Workflow neu startet).
+4. In der App beim Umschalter Demo/Live auf «Live starten» tippen und zweimal bestätigen (oder `auto start` senden). Zurück: «Demo» (verkauft die Bestände der Automatik in USDC). Die Secrets gelten ab dem nächsten Durchgang des Bots (spätestens nach 6 Stunden; sofort, wenn man den Workflow neu startet).
 
 ## Rückwärtstest Top 5 / 50 Tage auf USD-Basis (`research/`)
 
