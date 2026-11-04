@@ -21,13 +21,13 @@ Die Bitvavo-Gebühr (0,25 % pro Kauf und Verkauf) ist im Lernmodell eingerechnet
 
 Der Bot liest deine Käufe über den ntfy-Kanal `<dein Kanal>-cmd`. Zwei Wege:
 
-- **Radar-App:** Im Coin auf «Als gekauft eintragen» oder «Verkauf eintragen» tippen. Die App schickt das automatisch an den Bot, sofern dort derselbe ntfy-Kanal eingetragen ist.
+- **Radar-App:** Im Coin unter «Meine Position» einen Betrag wählen (50, 100, 150, 200 € oder ein eigener Betrag). Die App berechnet die Stückzahl inklusive 0,25 % Gebühr und rundet auf die bei Bitvavo erlaubten Nachkommastellen. Beim Kauf ist der Betrag das, was du insgesamt zahlst. Beim Verkauf ist er das, was du nach der Gebühr erhältst. Möglich sind auch «Alles», Nachkaufen (mit Durchschnittspreis) und Teilverkäufe. Die App schickt alles automatisch an den Bot, sofern dort derselbe ntfy-Kanal eingetragen ist.
 - **ntfy-App:** Den Kanal `<dein Kanal>-cmd` abonnieren und eine Nachricht senden:
-  - `kauf BTC 61500 0.02` (Coin, Kaufpreis, Menge optional)
-  - `verkauf BTC 63000` (Verkaufspreis optional)
-  - `liste` zeigt alle Positionen mit aktueller Empfehlung
+  - `kauf BTC 61500 0.02` (Coin, Kaufpreis, Menge optional). Bei bestehender Position mit Menge gilt das als Nachkauf.
+  - `verkauf BTC 63000` verkauft alles, `verkauf BTC 63000 0.01` nur einen Teil.
+  - `liste` zeigt alle Positionen mit Ergebnis nach Gebühren und aktueller Empfehlung.
 
-Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push. Stop und Ziel berechnet er aus der Volatilität. Danach meldet er sich, wenn du verkaufen solltest. Ab dann sichert ein nachlaufender Stop deine Gewinne.
+Der Bot bestätigt jede Eingabe beim nächsten Lauf per Push, mit Einsatz, Erlös und Ergebnis nach Gebühren. Stop und Ziel berechnet er aus der Volatilität. Danach meldet er sich, wenn du verkaufen solltest. Ab dann sichert ein nachlaufender Stop deine Gewinne.
 
 Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.enc`). Schlüssel ist dein ntfy-Kanal: Ohne ihn kann niemand die Datei lesen. Änderst du den Kanal, beginnt der Bot mit leerem Bestand.
 

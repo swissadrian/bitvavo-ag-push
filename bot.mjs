@@ -248,11 +248,17 @@ async function readCommands(){
     st.cmdSince=m.id;const t=(m.message||'').trim();let x;
     if(x=t.match(/^(kauf|kaufen|gekauft|buy)\s+([a-z0-9]+)(?:-eur)?\s+([\d'.,]+)(?:\s+([\d'.,]+))?/i)){
       const mk=x[2].toUpperCase()+'-EUR',buy=num(x[3]),qty=x[4]?num(x[4]):null;
-      if(buy>0){st.pos[mk]={buy,qty,t:m.time*1000};delete st.notified['s:'+mk];confirmations.push({kind:'add',mk})}
-    }else if(x=t.match(/^(verkauf|verkaufen|verkauft|sell)\s+([a-z0-9]+)(?:-eur)?(?:\s+([\d'.,]+))?/i)){
+      if(buy>0){const ex=st.pos[mk];
+        if(ex&&ex.qty&&qty){const q=ex.qty+qty;st.pos[mk]={buy:(ex.buy*ex.qty+buy*qty)/q,qty:q,cost:(ex.cost??ex.buy*ex.qty*(1+FEE))+buy*qty*(1+FEE),t:ex.t};const n=st.pos[mk];confirmations.push({kind:'add',mk,nach:qty,preis:buy,snap:{buy:n.buy,qty:n.qty,cost:n.cost}})}   // Nachkauf: Durchschnittspreis
+        else{st.pos[mk]={buy,qty,cost:qty?buy*qty*(1+FEE):null,t:m.time*1000};confirmations.push({kind:'add',mk,snap:{buy,qty,cost:st.pos[mk].cost}})}
+        delete st.notified['s:'+mk]}
+    }else if(x=t.match(/^(verkauf|verkaufen|verkauft|sell)\s+([a-z0-9]+)(?:-eur)?(?:\s+([\d'.,]+)(?:\s+([\d'.,]+))?)?/i)){
       const mk=x[2].toUpperCase()+'-EUR',p=st.pos[mk];
-      if(p){const sell=x[3]?num(x[3]):null;st.closed.push({m:mk,buy:p.buy,sell,t:p.t,end:m.time*1000});st.closed=st.closed.slice(-200);
-        delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy})}
+      if(p){const sell=x[3]?num(x[3]):null,qq=x[4]?num(x[4]):null,part=!!(qq&&p.qty&&qq<p.qty*0.9999);
+        const cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,qs=part?qq:p.qty,cs=cost&&qs?cost*qs/p.qty:null,net=sell&&qs?qs*sell*(1-FEE):null,eur=cs!=null&&net!=null?net-cs:null;
+        st.closed.push({m:mk,buy:p.buy,sell,qty:qs,t:p.t,end:m.time*1000,eur,teil:part});st.closed=st.closed.slice(-200);
+        if(part){p.qty-=qq;p.cost=cost-cs;confirmations.push({kind:'part',mk,q:qq,rest:p.qty,sell,eur,net})}
+        else{delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy,eur,net})}}
       else confirmations.push({kind:'unknown',mk});
     }else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
     else confirmations.push({kind:'help',t});
@@ -261,7 +267,8 @@ async function readCommands(){
 
 function advice(mk,p,last){
   const r=results[mk],a=r?r.d.A[r.d.c.length-1]:last*0.02;
-  const pnl=(last/p.buy-1)*100,eur=p.qty?(last-p.buy)*p.qty:null;
+  // Ergebnis nach Gebühren für Kauf und Verkauf
+  const cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,eur=p.qty?p.qty*last*(1-FEE)-cost:null,pnl=cost?eur/cost*100:((last*(1-FEE))/(p.buy*(1+FEE))-1)*100;
   const R=riskOf(p.buy,a),trail=p.high>=p.buy+R?p.high-R:-Infinity,eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail),o={pnl,eur,eff,last};
   if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
   if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
@@ -659,11 +666,12 @@ async function main(){
     st.notified[key]={s:adv.act,t:now}}
 
   for(const c of confirmations){const b=c.mk?.replace('-EUR','');
-    if(c.kind==='add'){const p=st.pos[c.mk];await push(`Kauf eingetragen: ${b}`,`Kaufpreis ${fmtP(p.buy)} €${p.qty?`, Menge ${p.qty}`:''}. Stop ${fmtP(p.stop)} €, Ziel ${fmtP(p.tp)} €. Ich melde mich, sobald du verkaufen solltest.`,3,'white_check_mark')}
-    else if(c.kind==='del')await push(`Verkauf eingetragen: ${b}`,c.sell?`Ergebnis ${pct((c.sell/c.buy-1)*100)} (Kauf ${fmtP(c.buy)} €, Verkauf ${fmtP(c.sell)} €).`:'Position entfernt.',3,'white_check_mark');
+    if(c.kind==='add'){const s=c.snap,p=st.pos[c.mk];await push(c.nach?`Nachkauf eingetragen: ${b}`:`Kauf eingetragen: ${b}`,(c.nach?`+${c.nach} zu ${fmtP(c.preis)} €. Neuer Durchschnittspreis ${fmtP(s.buy)} €, Bestand ${+s.qty.toFixed(8)}`:`Kaufpreis ${fmtP(s.buy)} €${s.qty?`, Menge ${s.qty}`:''}`)+`${s.cost?`, Einsatz inkl. Gebühr ${s.cost.toFixed(2)} €`:''}.`+(p&&p.stop!=null?` Stop ${fmtP(p.stop)} €, Ziel ${fmtP(p.tp)} €. Ich melde mich, sobald du verkaufen solltest.`:''),3,'white_check_mark')}
+    else if(c.kind==='part')await push(`Teilverkauf eingetragen: ${b}`,`${+c.q.toFixed(8)} verkauft${c.sell?` zu ${fmtP(c.sell)} €`:''}${c.net!=null?`, Erlös nach Gebühr ${c.net.toFixed(2)} €`:''}${c.eur!=null?`, Ergebnis ${c.eur>=0?'+':''}${c.eur.toFixed(2)} €`:''}. Restbestand ${+c.rest.toFixed(8)}, wird weiter überwacht.`,3,'white_check_mark');
+    else if(c.kind==='del')await push(`Verkauf eingetragen: ${b}`,c.sell?`Ergebnis ${c.eur!=null?`${c.eur>=0?'+':''}${c.eur.toFixed(2)} € nach Gebühren`:pct(((c.sell*(1-FEE))/(c.buy*(1+FEE))-1)*100)+' nach Gebühren'} (Kauf ${fmtP(c.buy)} €, Verkauf ${fmtP(c.sell)} €).`:'Position entfernt.',3,'white_check_mark');
     else if(c.kind==='unknown')await push(`${b} nicht im Bestand`,'Zu diesem Coin ist kein Kauf eingetragen.',2,'grey_question');
-    else if(c.kind==='list'){const L=Object.entries(st.pos);await push('Deine Positionen',L.length?L.map(([mk,p])=>{const last=+(tick24[mk]?.last||0);return `${mk.replace('-EUR','')}: ${pct((last/p.buy-1)*100)} · ${advice(mk,p,last).label}`}).join('\n'):'Keine Positionen eingetragen.',2,'clipboard')}
-    else await push('Befehl nicht verstanden',`«${c.t.slice(0,60)}». Beispiele: «kauf BTC 61500 0.02», «verkauf BTC 63000», «liste».`,2,'grey_question');
+    else if(c.kind==='list'){const L=Object.entries(st.pos);await push('Deine Positionen',L.length?L.map(([mk,p])=>{const last=+(tick24[mk]?.last||0);const a=advice(mk,p,last);return `${mk.replace('-EUR','')}: ${pct(a.pnl)}${a.eur!=null?` (${a.eur>=0?'+':''}${a.eur.toFixed(2)} €)`:''} · ${a.label}`}).join('\n'):'Keine Positionen eingetragen.',2,'clipboard')}
+    else await push('Befehl nicht verstanden',`«${c.t.slice(0,60)}». Beispiele: «kauf BTC 61500 0.02», «verkauf BTC 63000» (alles), «verkauf BTC 63000 0.01» (Teil), «liste».`,2,'grey_question');
   }
   for(const s of sells)await push(s.t,s.b,5,'warning');
   buys.sort((a,b)=>b.ev-a.ev);
