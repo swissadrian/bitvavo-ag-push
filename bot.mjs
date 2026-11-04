@@ -744,6 +744,105 @@ async function trendTest(){
   st.trendV=TREND_V;console.log(`Trendfolge-Test fertig (${Math.round((Date.now()-t0)/1e3)} s, ${out.von} bis ${out.bis}, ${out.coins_mit_daten} Coins)`);
 }
 
+
+/* ---------- USDC-Test (einmalig je Version): Top 5 mit Trendfilter 50 Tage, gehandelt gegen USDC statt EUR ---------- */
+// Seriöse Rechnung: nur Coins, die gegen USDC wirklich handelbar sind; Kosten = 0,05 % + halber Spread aus dem USDC-Orderbuch;
+// Kurs in US-Dollar = EUR-Kurs × EUR/USD (EZB); Bargeld liegt in USDC; Umtausch EUR→USDC 0,10 % am Anfang und am Ende;
+// Ergebnis zusätzlich in Franken (EZB-Kurs EUR/CHF). Empfindlichkeit: 40/50/60 Tage und jeder Wochentag als Umschichttag.
+const USDC_V=1;
+async function usdcTest(){
+  if(st.usdcV===USDC_V)return;const t0=Date.now(),D=864e5,start=Date.UTC(2019,0,1),today=Math.floor(Date.now()/D)*D;
+  const tk=await j(API+'/ticker/24h'),ms=await j(API+'/markets'),tv=Object.fromEntries(tk.map(x=>[x.market,+x.volumeQuote||0]));
+  const usdcAll=ms.filter(m=>m.quote==='USDC'&&m.status==='trading'&&!STABLE.has(m.base)).map(m=>({markt:m.market,base:m.base,vol:tv[m.market]||0})).sort((a,b)=>b.vol-a.vol);
+  const U=usdcAll.filter(x=>x.vol>=MIN_VOL).map(x=>x.base);                     // > 50'000 $ Umsatz am letzten Tag gegen USDC
+  const chfMk=ms.filter(m=>m.base.includes('CHF')||m.quote.includes('CHF')).map(m=>m.market);
+  // Orderbücher: halber Spread und Kosten einer Marktorder über 200 (drei Momentaufnahmen, Median)
+  async function bookCost(mk){const r=[];for(let k=0;k<3;k++){try{const b=await j(`${API}/${mk}/book?depth=50`);const bid=+b.bids[0][0],ask=+b.asks[0][0],mid=(bid+ask)/2;
+      let need=200,cost=0;for(const [p,q] of b.asks){const take=Math.min(need,+p*+q);cost+=take*(+p/mid-1);need-=take;if(need<=0)break}
+      r.push({half:(ask-bid)/2/mid,slip200:need>0?null:cost/200})}catch(e){}if(k<2)await sleep(4000)}
+    if(!r.length)return null;const med=a=>{a=a.filter(x=>x!=null).sort((x,y)=>x-y);return a.length?a[a.length>>1]:null};return{half:med(r.map(x=>x.half)),slip200:med(r.map(x=>x.slip200))}}
+  const books={};for(const b of new Set([...U,'BTC'])){books[b+'-USDC']=await bookCost(b+'-USDC');books[b+'-EUR']=await bookCost(b+'-EUR')}
+  // Tageskerzen EUR (alle Kandidaten wie im Trendtest) und USDC (zur Kontrolle)
+  const cand=tk.filter(x=>x.market?.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.volumeQuote>=MIN_VOL).map(x=>x.market);for(const b of U)if(!cand.includes(b+'-EUR'))cand.push(b+'-EUR');
+  const load=async mk=>{const m=new Map();for(let s=start;s<today;s+=1440*D){const e=Math.min(today-1,s+1440*D-1);
+    for(const k of (await j(`${API}/${mk}/candles?interval=1d&limit=1440&start=${s}&end=${e}`))||[]){const t=+k[0];if(t<today)m.set(t,{o:+k[1],c:+k[4],v:+k[5]})}}return m};
+  const raw={},rawU={};await pool(cand,3,async mk=>{const m=await load(mk);if(m.size>=60)raw[mk]=m});
+  await pool(U.map(b=>b+'-USDC'),2,async mk=>{rawU[mk]=await load(mk)});
+  let usdcEur=new Map();try{usdcEur=await load('USDC-EUR')}catch(e){}
+  // EZB-Referenzkurse (USD und CHF je EUR), Wochenenden mit letztem Kurs
+  const fx={USD:new Map(),CHF:new Map()};let fxQuelle='EZB';
+  try{const r=await fetch('https://data-api.ecb.europa.eu/service/data/EXR/D.USD+CHF.EUR.SP00.A?format=csvdata&startPeriod=2018-12-01');if(!r.ok)throw new Error('EZB '+r.status);
+    const lines=(await r.text()).trim().split(/\r?\n/),h=lines[0].split(','),ic=h.indexOf('CURRENCY'),it=h.indexOf('TIME_PERIOD'),iv=h.indexOf('OBS_VALUE');
+    for(const l of lines.slice(1)){const c=l.split(',');const v=+c[iv];if(v>0&&fx[c[ic]])fx[c[ic]].set(Date.parse(c[it]+'T00:00:00Z'),v)}}
+  catch(e){console.warn('EZB-Kurse',e.message);fxQuelle='Bitvavo USDC-EUR (ohne CHF)';for(const [t,x] of usdcEur)fx.USD.set(t,1/x.c)}
+  const B=raw['BTC-EUR'],t0d=Math.min(...B.keys()),days=[];for(let t=t0d;t<today;t+=D)days.push(t);
+  const ffill=m=>{const a=[];let last=NaN;for(const t of days){if(m.has(t))last=m.get(t);a.push(last)}let first=a.find(x=>x===x);return a.map(x=>x===x?x:first)};
+  const usd=ffill(fx.USD),chf=fx.CHF.size?ffill(fx.CHF):null;
+  const A={};for(const [mk,m] of Object.entries(raw)){const o=[],c=[],ve=[];for(const t of days){const x=m.get(t);o.push(x?x.o:NaN);c.push(x?x.c:NaN);ve.push(x?x.v*x.c:NaN)}
+    const cf=[];let last=NaN;for(let i=0;i<days.length;i++){if(c[i]===c[i])last=c[i];cf.push(last)}
+    const v30=new Array(days.length).fill(0);let s=0;for(let i=0;i<days.length;i++){s+=ve[i]===ve[i]?ve[i]:0;if(i>=30)s-=ve[i-30]===ve[i-30]?ve[i-30]:0;v30[i]=s}
+    // Kurse in USD (für den USDC-Handel) und die Durchschnitte in beiden Währungen
+    const ou=o.map((x,i)=>x*usd[i]),cu=cf.map((x,i)=>x*usd[i]);
+    const smaOf=(arr,N)=>{const a=new Array(days.length).fill(NaN);let s=0,n=0;for(let i=0;i<days.length;i++){if(arr[i]!==arr[i])continue;s+=arr[i];n++;if(n>N){s-=arr[i-N];n=N}if(n===N)a[i]=s/N}return a};
+    const sma={},smaU={};for(const N of [40,50,60]){sma[N]=smaOf(cf,N);smaU[N]=smaOf(cu,N)}
+    A[mk]={o,c,cf,ve,v30,ou,cu,sma,smaU}}
+  // Kontrolle: weicht EUR-Kurs × EUR/USD vom echten USDC-Kurs ab?
+  const kontrolle={};for(const [mk,m] of Object.entries(rawU)){const e=A[mk.replace('-USDC','-EUR')];if(!e)continue;const d=[];
+    days.forEach((t,i)=>{const x=m.get(t);if(x&&e.c[i]===e.c[i])d.push(Math.abs(x.c/(e.c[i]*usd[i])-1))});d.sort((a,b)=>a-b);
+    kontrolle[mk]={gelistet_seit:m.size?new Date(Math.min(...m.keys())).toISOString().slice(0,10):null,tage:d.length,median_abweichung_pct:d.length?+(d[d.length>>1]*100).toFixed(2):null}}
+  const i0=days.findIndex(t=>t>=Date.UTC(2019,8,23));
+  const spr=(mk)=>clip(books[mk]?.half??0.003,0.0001,0.01);
+  let live={};try{live=JSON.parse(fs.readFileSync(LOG+'/analyse/live.json','utf8')).orderbuch||{}}catch(e){}
+  const sprE=mk=>books[mk]?.half!=null?clip(books[mk].half,0.0001,0.01):clip((live[mk]?.spread??0.3)/200,0.0001,0.01);
+  const elig=(mk,i)=>A[mk]&&A[mk].ve[i]>=MIN_VOL&&A[mk].v30[i]>=MIN_VOL30&&A[mk].c[i]===A[mk].c[i];
+  const top5=pool_=>i=>pool_.filter(mk=>elig(mk,i)).sort((x,y)=>A[y].v30[i]-A[x].v30[i]).slice(0,5);
+  const allE=Object.keys(A),uE=U.map(b=>b+'-EUR').filter(mk=>A[mk]);
+  // Simulation; ccy 'EUR' = Handel gegen EUR, 'USD' = Handel gegen USDC (Kurse in USD, Bargeld in USDC)
+  function sim({name,ccy,fee,universe,N,wd,w=0.2,filter=true}){
+    const O=mk=>ccy==='USD'?A[mk].ou:A[mk].o,C=mk=>ccy==='USD'?A[mk].cu:A[mk].cf,S=mk=>ccy==='USD'?A[mk].smaU[N]:A[mk].sma[N];
+    const cost=mk=>fee+(ccy==='USD'?spr(mk.replace('-EUR','-USDC')):sprE(mk));
+    const pick=top5(universe);const wants=i=>{const p=pick(i);return filter?p.filter(mk=>C(mk)[i]>S(mk)[i]):p};
+    // Start: 1000 CHF (bzw. Gegenwert) → EUR → bei USDC zusätzlich 0,10 % Umtausch
+    let cash=ccy==='USD'?eur0*usd[i0]*(1-0.001):eur0,hold={},fees=ccy==='USD'?eur0*0.001:0,trades=0,inv=0;const eq=[];
+    for(let i=i0;i<days.length;i++){
+      if(i>i0&&(i-1===i0||new Date(days[i-1]).getUTCDay()===wd)){const want=new Set(wants(i-1));
+        const px=mk=>O(mk)[i]===O(mk)[i]?O(mk)[i]:C(mk)[i-1];
+        for(const mk of Object.keys(hold))if(!want.has(mk)){const val=hold[mk]*px(mk),f=val*cost(mk);cash+=val-f;fees+=f;trades++;delete hold[mk]}
+        let value=cash;for(const [mk,q] of Object.entries(hold))value+=q*px(mk);
+        for(const mk of want)if(!hold[mk]&&O(mk)[i]===O(mk)[i]){const amt=Math.min(cash,value*w);if(amt<1)continue;const f=amt*cost(mk);hold[mk]=(amt-f)/O(mk)[i];cash-=amt;fees+=f;trades++}}
+      let v=cash;for(const [mk,q] of Object.entries(hold)){const p=C(mk)[i];v+=q*(p===p?p:0)}
+      if(Object.keys(hold).length)inv++;
+      // Wert in EUR und CHF (bei USDC am Schluss wieder zurück in EUR: −0,10 %)
+      const vE=ccy==='USD'?v/usd[i]*(i===days.length-1?0.999:1):v;eq.push({lokal:v,eur:vE,chf:chf?vE*chf[i]:null})}
+    return{name,ccy,eq,fees,trades,inv:inv/eq.length}}
+  const yrs=(days.length-1-i0)/365,eur0=chf?1000/chf[i0]:1000;
+  const kenn=(e,start)=>{let pk=e[0],dd=0;for(const v of e){pk=Math.max(pk,v);dd=Math.min(dd,v/pk-1)}const l12=e.length>365?(e.at(-1)/e[e.length-366]-1)*100:null;
+    const jahr={};for(let k=0;k<e.length;k++){const y=new Date(days[i0+k]).getUTCFullYear();(jahr[y]||(jahr[y]={a:k>0?e[k-1]:start})).e=e[k]}
+    return{ende:+e.at(-1).toFixed(0),pro_jahr_pct:+((Math.pow(e.at(-1)/start,1/yrs)-1)*100).toFixed(1),max_rueckgang_pct:+(dd*100).toFixed(1),letzte_12_monate_pct:l12==null?null:+l12.toFixed(1),
+      jahre:Object.fromEntries(Object.entries(jahr).map(([y,x])=>[y,+((x.e/x.a-1)*100).toFixed(1)]))}};
+  const stat=s=>({name:s.name,waehrung:s.ccy==='USD'?'USDC':'EUR',trades:s.trades,gebuehren_lokal:+s.fees.toFixed(0),investiert_pct:Math.round(s.inv*100),
+    in_chf:chf?kenn(s.eq.map(x=>x.chf),1000):null,in_eur:kenn(s.eq.map(x=>x.eur),eur0),in_handelswaehrung:kenn(s.eq.map(x=>x.lokal),s.ccy==='USD'?eur0*usd[i0]:eur0)});
+  const fE=PAPER.taker,fU=0.0005,MON=1;
+  const haupt=[
+    {name:'Top 5 mit Trendfilter 50 Tage, gegen EUR (alle Coins)',ccy:'EUR',fee:fE,universe:allE,N:50,wd:MON},
+    {name:'Top 5 mit Trendfilter 50 Tage, gegen EUR (nur Coins mit USDC-Markt)',ccy:'EUR',fee:fE,universe:uE,N:50,wd:MON},
+    {name:'Top 5 mit Trendfilter 50 Tage, gegen USDC',ccy:'USD',fee:fU,universe:uE,N:50,wd:MON},
+    {name:'Top 5 ohne Filter gegen USDC (wöchentlich neu gewählt)',ccy:'USD',fee:fU,universe:uE,N:50,wd:MON,filter:false},
+    {name:'Bitcoin mit Trendfilter 50 Tage, gegen USDC',ccy:'USD',fee:fU,universe:['BTC-EUR'],N:50,wd:MON,w:1},
+    {name:'Bitcoin halten, gegen USDC',ccy:'USD',fee:fU,universe:['BTC-EUR'],N:50,wd:-1,w:1,filter:false}].map(v=>stat(sim(v)));
+  // Empfindlichkeit der USDC-Variante: Durchschnitt 40/50/60 × Umschichttag Mo–So
+  const emp=[];for(const N of [40,50,60])for(let wd=0;wd<7;wd++){const s=stat(sim({name:`${N} Tage, Tag ${wd}`,ccy:'USD',fee:fU,universe:uE,N,wd}));emp.push({tage:N,wochentag:['So','Mo','Di','Mi','Do','Fr','Sa'][wd],pro_jahr_chf:s.in_chf?.pro_jahr_pct??s.in_eur.pro_jahr_pct,rueckgang_chf:s.in_chf?.max_rueckgang_pct??s.in_eur.max_rueckgang_pct,letzte_12m:s.in_chf?.letzte_12_monate_pct})}
+  const pj=emp.map(x=>x.pro_jahr_chf).sort((a,b)=>a-b);
+  const fxEnt=k=>({start:+k[i0].toFixed(4),ende:+k.at(-1).toFixed(4),veraenderung_pct:+((k.at(-1)/k[i0]-1)*100).toFixed(1)});
+  const out={erstellt:new Date().toISOString(),version:USDC_V,von:new Date(days[i0]).toISOString().slice(0,10),bis:new Date(days.at(-1)).toISOString().slice(0,10),jahre:+yrs.toFixed(1),
+    start:'1000 CHF',wechselkurse:{quelle:fxQuelle,usd_je_eur:fxEnt(usd),chf_je_eur:chf?fxEnt(chf):null,chf_je_usd:chf?fxEnt(chf.map((c,i)=>c/usd[i])):null},
+    usdc_universum:U,usdc_maerkte:usdcAll.map(x=>({markt:x.markt,volumen_24h_usdc:Math.round(x.vol)})),chf_maerkte_bitvavo:chfMk,
+    orderbuch:Object.fromEntries(Object.entries(books).map(([k,v])=>[k,v&&{halber_spread_pct:v.half==null?null:+(v.half*100).toFixed(3),marktorder_200_pct:v.slip200==null?null:+(v.slip200*100).toFixed(3)}])),
+    kontrolle_usdc_kurs:kontrolle,strategien:haupt,empfindlichkeit:{varianten:emp,pro_jahr_chf_min:pj[0],pro_jahr_chf_median:pj[pj.length>>1],pro_jahr_chf_max:pj.at(-1)}};
+  fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/usdctest.json',JSON.stringify(out,null,1));
+  st.usdcV=USDC_V;console.log(`USDC-Test fertig (${Math.round((Date.now()-t0)/1e3)} s)`);
+}
+
 /* ---------- Hauptlauf ---------- */
 async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
@@ -807,6 +906,7 @@ async function main(){
   await paperStep().catch(e=>console.warn('Papierhandel',e.message));
   logRun(buys);
   await trendTest().catch(e=>console.warn('Trendfolge-Test',e.stack||e.message));
+  await usdcTest().catch(e=>console.warn('USDC-Test',e.stack||e.message));
   console.log(`Fertig: ${buys.length} neue Kauf-Signale, ${sells.length} Verkaufsmeldungen, ${confirmations.length} Eingaben.`);
 }
 
