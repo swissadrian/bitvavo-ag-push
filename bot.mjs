@@ -262,6 +262,13 @@ function appendCsv(rel,header,rows){
   if(!fs.existsSync(f))fs.writeFileSync(f,header.join(',')+'\n');
   fs.appendFileSync(f,rows.map(r=>r.map(csvq).join(',')).join('\n')+'\n');
 }
+// Zeilen in eine gepackte Datei einfügen, ohne Vorhandenes zu verlieren (gleiche Zeit + gleicher Markt nur einmal)
+function mergeGz(f,header,lines){
+  let old=[];if(fs.existsSync(f)){const t=zlib.gunzipSync(fs.readFileSync(f)).toString('utf8').trim().split('\n');header=t[0]||header;old=t.slice(1)}
+  const m=new Map();for(const l of [...old,...lines]){if(!l)continue;const c=l.split(',');m.set(c[0]+'|'+c[1],l)}
+  fs.mkdirSync(path.dirname(f),{recursive:true});
+  fs.writeFileSync(f,zlib.gzipSync([header,...[...m.values()].sort()].join('\n')+'\n',{level:9}));
+}
 const hourFile=(dir,ts)=>{const t=iso(ts);return `${dir}/${t.slice(0,7)}/${t.slice(0,10)}-${t.slice(11,13)}.csv`};
 const HK=['zeit_utc','markt','open','high','low','close','volumen'];
 const HS=['zeit_utc','markt','preis_eur','volumen_24h_eur','volumen_3t_eur','veraenderung_24h_pct','rsi','treffer_wahrsch','erwartung_r','signal'];
@@ -276,8 +283,23 @@ async function log1m(){
       (byFile[hourFile(TIERS.kurse[0].dir,ts)]||(byFile[hourFile(TIERS.kurse[0].dir,ts)]=[])).push([iso(ts),m.market,k[1],k[2],k[3],k[4],k[5]]);
       st.last1m[m.market]=Math.max(st.last1m[m.market]||0,ts)}
   });
-  let n=0;for(const f of Object.keys(byFile).sort()){byFile[f].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);appendCsv(f,HK,byFile[f]);n+=byFile[f].length}
+  let n=0;for(const f of Object.keys(byFile).sort()){byFile[f].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);n+=byFile[f].length;
+    const gz=LOG+'/'+f+'.gz';if(fs.existsSync(gz))mergeGz(gz,HK.join(','),byFile[f].map(r=>r.map(csvq).join(',')));else appendCsv(f,HK,byFile[f])}
   console.log(`${n} neue 1-Minuten-Werte geloggt.`);
+}
+// Einmalig: 1-Minuten-Werte seit Beginn des Logbuchs bei Bitvavo nachladen und einfügen (behebt verlorene Stunden)
+const REPAIR_V=1;
+async function repair1m(){
+  if(st.repair1m===REPAIR_V)return;
+  const from=Date.UTC(2026,10,3,19,0),to=Math.floor(Date.now()/36e5)*36e5-1,W=1440*6e4,byFile={};let n=0;
+  await pool(markets.filter(eligible),5,async m=>{
+    for(let s=from;s<to;s+=W){const e=Math.min(to,s+W-1);
+      const rows=await j(`${API}/${m.market}/candles?interval=1m&limit=1440&start=${s}&end=${e}`);
+      for(const k of rows||[]){const ts=+k[0];if(ts<from||ts>to)continue;const f=hourFile(TIERS.kurse[0].dir,ts);(byFile[f]||(byFile[f]=[])).push([iso(ts),m.market,k[1],k[2],k[3],k[4],k[5]].join(','));n++}}
+  });
+  for(const f of Object.keys(byFile)){const gz=LOG+'/'+f+'.gz',csv=LOG+'/'+f;
+    if(fs.existsSync(csv)){const x=readCsv(csv);mergeGz(gz,HK.join(','),[...x.rows,...byFile[f]]);fs.unlinkSync(csv)}else mergeGz(gz,HK.join(','),byFile[f])}
+  st.repair1m=REPAIR_V;console.log(`Reparatur: ${n} 1-Minuten-Werte seit 03.11. 19:00 UTC nachgeladen und eingefügt.`);
 }
 function logRun(buys){
   const now=Date.now(),t=iso(now),mon=t.slice(0,7),all=Object.values(results);
@@ -308,7 +330,7 @@ function writeDay(dir,day,h,rows){
 function housekeeping(){
   const now=Date.now(),curHour=hourFile('',now).slice(-17,-4);let packed=0,thinned=0,deleted=0;
   // Abgeschlossene Stundendateien packen
-  for(const p of files(LOG)){const m=path.basename(p).match(/^(\d{4}-\d{2}-\d{2}-\d{2})\.csv$/);if(m&&m[1]<curHour){fs.writeFileSync(p+'.gz',zlib.gzipSync(fs.readFileSync(p),{level:9}));fs.unlinkSync(p);packed++}}
+  for(const p of files(LOG)){const m=path.basename(p).match(/^(\d{4}-\d{2}-\d{2}-\d{2})\.csv$/);if(m&&m[1]<curHour){const x=readCsv(p);mergeGz(p+'.gz',x.h,x.rows);fs.unlinkSync(p);packed++}}
   // Ältere Stufen verdichten bzw. löschen
   for(const [kind,tiers] of Object.entries(TIERS)){
     tiers.forEach((tier,i)=>{
@@ -477,6 +499,7 @@ async function main(){
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
   console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >250k €/3 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
+  await repair1m().catch(e=>console.warn('Reparatur 1-Minuten-Log',e.message));
   // Umstellung auf 12 Monate: Analysen und Modell einmalig neu berechnen (die bekannte Warnung nicht erneut senden)
   if(st.longV!==LONG_V){st.longV=LONG_V;st.geoAt=0;st.featAt=0;st.model=null;if(st.edge===undefined&&st.geo)st.edge=false}
   if(st.geo)GEO={...GEO,...st.geo};
