@@ -1,4 +1,4 @@
-// Bitvavo Signal-Bot: prüft alle EUR-Märkte mit > 250k € Volumen, lernt aus dem Kursverlauf,
+// Bitvavo Signal-Bot: prüft die USDC-Märkte (Handel gegen USDC, Gebühr 0,05 %), lernt aus dem Kursverlauf,
 // schickt Kauf- und Verkaufssignale per ntfy und führt ein Logbuch. Gleiche Logik wie die Radar-App.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,20 +6,23 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
-const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k € am letzten Tag UND > 1 Mio. € in den letzten 30 Tagen
+const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k $ am letzten Tag UND > 1 Mio. $ in den letzten 30 Tagen (USDC-Märkte)
+// Gehandelt wird gegen USDC. Alte Positionen aus EUR-Märkten bleiben in EUR (0,25 %), bis sie verkauft sind.
+const QS='-USDC';
+const isEur=mk=>!!mk&&mk.endsWith('-EUR'), feeOf=mk=>isEur(mk)?0.0025:0.0005, cy=mk=>isEur(mk)?'€':'$';
 // Umsatz in € der letzten h Stunden aus den Kerzen; null, wenn die geladenen Kerzen dafür nicht weit genug zurückreichen
 const volSum=(d,h)=>{const n=Math.round(h/TFH[TF]);if(d.c.length<n&&d.c.length>=HIST)return null;let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
 const vol3d=d=>volSum(d,72)??0;
-const eligible=m=>m.vol>=MIN_VOL&&(m.vol30d??0)>=MIN_VOL30;
+const eligible=m=>!isEur(m.market)&&m.vol>=MIN_VOL&&(m.vol30d??0)>=MIN_VOL30;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
 const TFMS={'15m':9e5,'1h':36e5,'4h':144e5};
-const FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)
+const FEE=0.0005;  // Gebühr pro Seite (Bitvavo USDC-Märkte 0,05 %)
 // Trade-Aufbau: Risiko R = max(sl × ATR, minRisk × Kurs), Ziel = tp × R, Haltedauer h Stunden.
 // Der GitHub-Bot testet regelmässig, welcher Aufbau nach Gebühren am besten funktioniert, und veröffentlicht ihn.
 let GEO={sl:2,minRisk:0.02,tp:2,h:24};
-const STABLE=new Set(['USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
+const STABLE=new Set(['USDCV','EUROP','EURCV','USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
 const riskOf=(e,a)=>Math.max(GEO.sl*a,GEO.minRisk*e);
 const horBars=()=>Math.max(2,Math.round(GEO.h/TFH[TF]));
 const HIST=1000, RETRAIN_MS=30*60e3;
@@ -44,7 +47,7 @@ function adx(h,l,c,n=14){const N=c.length,P=Array(N).fill(0),M=Array(N).fill(0),
 function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.length;i++){while(q.length&&q[0]<i-w)q.shift();o[i]=q.length?h[q[0]]:null;while(q.length&&h[q[q.length-1]]<=h[i])q.pop();q.push(i)}return o}
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
-function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
+function setBtc(src=data){BTCX=new Map();const d=src['BTC'+QS];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
 // Zusätzliche Daten, die Bitvavo-Kerzen nicht enthalten: Fear & Greed (Tag), Orderbuch je Markt (Stunde), CoinGecko-Marktdaten (Stunde)
 const EXT={fg:new Map(),ob:new Map(),cg:new Map()},HOUR=36e5,DAYMS=864e5;
 function fgAt(ts){const v=EXT.fg.get(Math.floor(ts/DAYMS)*DAYMS);return v==null?null:v}
@@ -102,7 +105,7 @@ const FEATS=[
  {g:'fg',n:'Extreme Angst (F&G < 25)',f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:v<25?1:0},t:()=>'Extreme Angst am Markt'},
  // Orderbuch (wird vom Bot gesammelt)
  {g:'ob',n:'Spread',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.spread+0.01)+1,-1,3):NaN},t:v=>'Spread '+(10**(v-1)-0.01).toFixed(2)+' %'},
- {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' €'},
+ {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' $'},
  {g:'ob',n:'Orderbuch-Ungleichgewicht',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?o.imb:NaN},t:v=>v>0?'Mehr Kauf- als Verkaufsaufträge nahe am Kurs':'Mehr Verkaufs- als Kaufaufträge nahe am Kurs'},
  // CoinGecko-Marktdaten (werden vom Bot gesammelt)
  {g:'cg',n:'Gesamtmarkt 24h',num:1,f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.chg!=null?clip(c.chg/5,-2,2):NaN},t:v=>'Krypto-Gesamtmarkt 24h '+pct(v*5)},
@@ -248,14 +251,14 @@ async function readCommands(){
   const msgs=(await r.text()).split('\n').filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(m=>m&&m.event==='message');
   for(const m of msgs){
     st.cmdSince=m.id;const t=(m.message||'').trim();let x;
-    if(x=t.match(/^(kauf|kaufen|gekauft|buy)\s+([a-z0-9]+)(?:-eur)?\s+([\d'.,]+)(?:\s+([\d'.,]+))?/i)){
-      const mk=x[2].toUpperCase()+'-EUR',buy=num(x[3]),qty=x[4]?num(x[4]):null;
+    if(x=t.match(/^(kauf|kaufen|gekauft|buy)\s+([a-z0-9]+)(?:-(eur|usdc))?\s+([\d'.,]+)(?:\s+([\d'.,]+))?/i)){const q_=(x[3]||'eur').toUpperCase();x=[x[0],x[1],x[2],x[4],x[5]];
+      const mk=x[2].toUpperCase()+'-'+q_,FEE=feeOf(mk),buy=num(x[3]),qty=x[4]?num(x[4]):null;
       if(buy>0){const ex=st.pos[mk];
         if(ex&&ex.qty&&qty){const q=ex.qty+qty;st.pos[mk]={buy:(ex.buy*ex.qty+buy*qty)/q,qty:q,cost:(ex.cost??ex.buy*ex.qty*(1+FEE))+buy*qty*(1+FEE),t:ex.t};const n=st.pos[mk];confirmations.push({kind:'add',mk,nach:qty,preis:buy,snap:{buy:n.buy,qty:n.qty,cost:n.cost}})}   // Nachkauf: Durchschnittspreis
         else{st.pos[mk]={buy,qty,cost:qty?buy*qty*(1+FEE):null,t:m.time*1000};confirmations.push({kind:'add',mk,snap:{buy,qty,cost:st.pos[mk].cost}})}
         delete st.notified['s:'+mk]}
-    }else if(x=t.match(/^(verkauf|verkaufen|verkauft|sell)\s+([a-z0-9]+)(?:-eur)?(?:\s+([\d'.,]+)(?:\s+([\d'.,]+))?)?/i)){
-      const mk=x[2].toUpperCase()+'-EUR',p=st.pos[mk];
+    }else if(x=t.match(/^(verkauf|verkaufen|verkauft|sell)\s+([a-z0-9]+)(?:-(eur|usdc))?(?:\s+([\d'.,]+)(?:\s+([\d'.,]+))?)?/i)){const q_=x[3]?x[3].toUpperCase():(st.pos[x[2].toUpperCase()+'-EUR']?'EUR':'USDC');x=[x[0],x[1],x[2],x[4],x[5]];
+      const mk=x[2].toUpperCase()+'-'+q_,p=st.pos[mk],FEE=feeOf(mk);
       if(p){const sell=x[3]?num(x[3]):null,qq=x[4]?num(x[4]):null,part=!!(qq&&p.qty&&qq<p.qty*0.9999);
         const cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,qs=part?qq:p.qty,cs=cost&&qs?cost*qs/p.qty:null,net=sell&&qs?qs*sell*(1-FEE):null,eur=cs!=null&&net!=null?net-cs:null;
         st.closed.push({m:mk,buy:p.buy,sell,qty:qs,t:p.t,end:m.time*1000,eur,teil:part});st.closed=st.closed.slice(-200);
@@ -270,13 +273,13 @@ async function readCommands(){
 function advice(mk,p,last){
   const r=results[mk],a=r?r.d.A[r.d.c.length-1]:last*0.02;
   // Ergebnis nach Gebühren für Kauf und Verkauf
-  const cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,eur=p.qty?p.qty*last*(1-FEE)-cost:null,pnl=cost?eur/cost*100:((last*(1-FEE))/(p.buy*(1+FEE))-1)*100;
+  const FEE=feeOf(mk),C=cy(mk),cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,eur=p.qty?p.qty*last*(1-FEE)-cost:null,pnl=cost?eur/cost*100:((last*(1-FEE))/(p.buy*(1+FEE))-1)*100;
   const R=riskOf(p.buy,a),trail=p.high>=p.buy+R?p.high-R:-Infinity,eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail),o={pnl,eur,eff,last};
-  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
-  if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
-  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',why:`Modell zählt ${mk.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins`};
+  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} ${C} unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} ${C} erreicht, Verlust begrenzen`};
+  if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',why:`Ziel ${fmtP(p.tp)} ${C} erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} ${C}`};
+  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',why:`Modell zählt ${mk.split('-')[0]} jetzt zu den schwächsten 20 % aller Coins`};
   if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',why:`RSI ${r.rsi.toFixed(0)} stark überkauft`};
-  return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} €, Ziel ${fmtP(p.tp)} €`};
+  return{...o,act:'hold',label:'Halten',why:`Stop ${fmtP(eff)} ${C}, Ziel ${fmtP(p.tp)} ${C}`};
 }
 
 /* ---------- Logbuch ----------
@@ -387,7 +390,7 @@ function logRun(buys){
   const now=Date.now(),t=iso(now),mon=t.slice(0,7),all=Object.values(results);
   appendCsv(hourFile(TIERS.signale[0].dir,now),HS,markets.filter(m=>results[m.market]&&eligible(m)).map(m=>{const r=results[m.market];return[t,m.market,m.last,Math.round(m.vol),Math.round(m.vol3d),m.chg.toFixed(2),r.rsi.toFixed(1),r.p.toFixed(3),r.ev.toFixed(3),r.sig[1]]}));
   appendCsv(`laeufe/${mon}.csv`,['zeit_utc','zeiteinheit','maerkte','kauf_signale','meiden','modell_signale','basis_trefferquote','top10_trefferquote','top10_ergebnis_r','btc_eur','dauer_s'],
-    [[t,TF,markets.filter(eligible).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC-EUR')?.last??'',((now-T0)/1000).toFixed(0)]]);
+    [[t,TF,markets.filter(eligible).length,all.filter(r=>r.sig[0]>0).length,all.filter(r=>r.sig[0]<0).length,model.n,model.baseWin.toFixed(3),model.top.win.toFixed(3),model.top.r.toFixed(3),markets.find(m=>m.market==='BTC'+QS)?.last??'',((now-T0)/1000).toFixed(0)]]);
   appendCsv(`meldungen/${mon}.csv`,['zeit_utc','titel','text'],buys.map(b=>[t,b.t,b.b]));
 }
 
@@ -439,7 +442,7 @@ function housekeeping(){
 
 /* ---------- Langzeitverlauf: bis 24 Monate Kerzen je Markt, zwischengespeichert im Runner ---------- */
 // Geladen werden 24 Monate; trainiert wird auf 12 oder 24 Monaten, je nach wöchentlichem Vergleich (st.histDays)
-const HIST_MAX=+(process.env.HIST_MAX||730), CACHE=process.env.CACHE_DIR||'verlauf', LONG_V=1;
+const HIST_MAX=+(process.env.HIST_MAX||730), CACHE=process.env.CACHE_DIR||'verlauf', LONG_V=2;   // 2: Umstellung auf USDC-Märkte
 const winDays=()=>Math.min(HIST_MAX,st.histDays||365);
 // Lädt [start,end] in Fenstern zu höchstens 1440 Kerzen (unabhängig von der Sortierung der Antwort)
 async function fetchRange(mk,start,end,map){
@@ -470,12 +473,12 @@ function packModel(m){
 // Einmal täglich: 24 Monate laden, wöchentliche Analysen, Modell trainieren und veröffentlichen
 async function longTrain(){
   const t0=Date.now(),c0=bvCount;st.longTryAt=t0;
-  const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC-EUR'))list.push('BTC-EUR');
+  const list=markets.filter(eligible).map(m=>m.market);if(!list.includes('BTC'+QS))list.push('BTC'+QS);
   const hist={};let bars=0;
   await pool(list,3,async mk=>{const rows=await history(mk);if(rows.length>=300){hist[mk]=prep(rows,mk);bars+=rows.length}});
   const mk=Object.keys(hist).length;
   console.log(`Langzeitverlauf: ${mk} Märkte, ${bars.toLocaleString('de-CH')} Kerzen (bis ${HIST_MAX} Tage), ${bvCount-c0} Abfragen, ${((Date.now()-t0)/1e3).toFixed(0)} s.`);
-  if(!hist['BTC-EUR']||mk<10)throw new Error('Langzeitverlauf unvollständig');
+  if(!hist['BTC'+QS]||mk<3)throw new Error('Langzeitverlauf unvollständig');
   setBtc(hist);await loadFgHistory();loadExtLog();
   if(!st.winAt||Date.now()-st.winAt>7*DAY_MS)await windowAB(hist);
   const minTs=Date.now()-winDays()*DAY_MS;let inWin=0;for(const d of Object.values(hist))for(const t of d.ts)if(t>=minTs)inWin++;
@@ -625,11 +628,12 @@ async function featureAB(src=data,minTs=0){
 /* ---------- Papierhandel: so würde der Bot über die Bitvavo-API handeln (simuliert, ohne echtes Geld) ---------- */
 // Zwei Varianten mit denselben Signalen: «limit» kauft mit Limit-Order zum Geldkurs (0,15 %, verfällt nach 15 Min)
 // und verkauft am Ziel per Limit; «markt» kauft und verkauft sofort zum Marktpreis (0,25 %). Stop-Loss immer als Marktorder.
-const PAPER={kapital:1000,betrag:100,maxPos:10,maker:0.0015,taker:0.0025,limitMin:15};
+const PAPER={kapital:1000,betrag:100,maxPos:10,maker:0.0005,taker:0.0005,limitMin:15,waehrung:'USDC'};   // Beträge in $, Gebühren der USDC-Märkte
 const VARIANTS={limit:'Limit-Orders',markt:'Marktorders'};
-const HP=['variante','markt','kauf_utc','kaufpreis','menge','verkauf_utc','verkaufspreis','grund','gebuehren_eur','ergebnis_eur','ergebnis_pct'];
+const HP=['variante','markt','kauf_utc','kaufpreis','menge','verkauf_utc','verkaufspreis','grund','gebuehren_usd','ergebnis_usd','ergebnis_pct'];
 async function paperStep(){
   const now=Date.now();
+  if(st.paperQ!=='USDC'){if(st.paper)console.log('Papierhandel: Neustart in USDC (der EUR-Papierhandel vom '+new Date(st.paper.start).toISOString().slice(0,10)+' wird beendet).');st.paper=null;st.paperQ='USDC'}
   if(!st.paper)st.paper={start:now,prevOn:{},lastCheck:now-5*6e4,curve:[]};
   const P=st.paper;for(const k of Object.keys(VARIANTS))if(!P[k])P[k]={cash:PAPER.kapital,pos:{},orders:{},fees:0,closed:0,wins:0,pnl:0,storniert:0};
   // 1-Minuten-Kerzen seit der letzten Prüfung für alle offenen Positionen und Orders
@@ -665,9 +669,9 @@ async function paperStep(){
       if(k==='markt'){const q=PAPER.betrag/(bk.ask*(1+PAPER.taker));V.cash-=PAPER.betrag;open(k,m.market,bk.ask,q,PAPER.taker,now)}
       else{const q=PAPER.betrag/(bk.bid*(1+PAPER.maker));V.cash-=PAPER.betrag;V.orders[m.market]={limit:bk.bid,qty:q,reserve:PAPER.betrag,t:now}}}}
   P.lastCheck=now;
-  rows.sort((a,b)=>a[5]<b[5]?-1:1);appendCsv(`papier/${iso(now).slice(0,7)}.csv`,HP,rows);
+  rows.sort((a,b)=>a[5]<b[5]?-1:1);appendCsv(`papier/usdc-${iso(now).slice(0,7)}.csv`,HP,rows);
   // Übersicht für die App
-  const sum={start:new Date(P.start).toISOString(),stand:new Date(now).toISOString(),betrag:PAPER.betrag,kapital:PAPER.kapital,varianten:{}};
+  const sum={start:new Date(P.start).toISOString(),stand:new Date(now).toISOString(),betrag:PAPER.betrag,kapital:PAPER.kapital,waehrung:'USDC',varianten:{}};
   for(const [k,name] of Object.entries(VARIANTS)){const V=P[k];let val=V.cash;const pos=[];
     for(const [mk,x] of Object.entries(V.pos)){const px=lastPx(mk)??x.entry,v=x.qty*px*(1-PAPER.taker);val+=v;pos.push({markt:mk,kauf:x.entry,seit:new Date(x.t).toISOString(),kurs:px,ergebnis:+(v-x.cost).toFixed(2),stop:+x.stop.toPrecision(6),ziel:+x.tp.toPrecision(6)})}
     for(const o of Object.values(V.orders))val+=o.reserve;
@@ -678,7 +682,7 @@ async function paperStep(){
   fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/papier.json',JSON.stringify(sum));
   console.log(`Papierhandel: Limit ${fmtEur(sum.varianten.limit.ergebnis)} (${Object.keys(P.limit.pos).length} offen, ${Object.keys(P.limit.orders).length} Orders), Markt ${fmtEur(sum.varianten.markt.ergebnis)} (${Object.keys(P.markt.pos).length} offen), ${rows.length} Verkäufe in diesem Lauf`);
 }
-const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' €';
+const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' $';
 
 /* ---------- Trendfolge-Test auf Tageskerzen (einmalig je Version): nur kaufen und halten, kein Hebel, kein Short ---------- */
 // Feste, vorab gewählte Regeln (keine Optimierung): Durchschnitt 50, 100 und 200 Tage werden alle gezeigt.
@@ -848,14 +852,14 @@ async function main(){
   await readCommands().catch(e=>console.warn('Befehle',e.message));
   const t=await j(API+'/ticker/24h');
   const tick24=Object.fromEntries(t.map(x=>[x.market,x]));
-  markets=t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
+  markets=t.filter(x=>x.market&&(x.market.endsWith(QS)||st.pos[x.market])&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||st.pos[x.market]))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}));
-  console.log(`${markets.length} Märkte über 50k € in 24h, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
+  console.log(`${markets.length} USDC-Märkte über 50k $ in 24h, Zeiteinheit ${TF}, ${Object.keys(st.pos).length} eigene Positionen`);
   await pool(markets,5,async m=>{const rows=(await j(`${API}/${m.market}/candles?interval=${TF}&limit=${HIST}`)).slice().reverse();if(rows.length>=220)data[m.market]=prep(rows,m.market)});
   markets.forEach(m=>{const d=data[m.market];if(d){m.vol3d=vol3d(d);m.vol30d=volSum(d,720)??vol3d(d)*10}});
   markets=markets.filter(m=>data[m.market]&&(eligible(m)||st.pos[m.market]));
   for(const k of Object.keys(data))if(!markets.find(m=>m.market===k))delete data[k];
-  console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k €/24h, >1 Mio. €/30 Tage).`);
+  console.log(`${markets.filter(eligible).length} Märkte erfüllen den Filter (>50k $/24h, >1 Mio. $/30 Tage).`);
   await log1m().catch(e=>console.warn('1-Minuten-Log',e.message));
   await repair1m().catch(e=>console.warn('Reparatur 1-Minuten-Log',e.message));
   await logExt().catch(e=>console.warn('Zusatzdaten',e.message));
@@ -876,7 +880,7 @@ async function main(){
   const now=Date.now(),buys=[],sells=[];
   for(const m of markets){const r=results[m.market];if(!r||!eligible(m))continue;
     const key='b:'+m.market+':'+TF,on=r.sig[0]>=LEVEL,prev=st.notified[key];
-    if(on&&!(prev&&prev.s))buys.push({t:`${r.sig[1]}: ${m.base} (${TF})`,b:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,ev:r.ev});
+    if(on&&!(prev&&prev.s))buys.push({t:`${r.sig[1]}: ${m.base} (${TF})`,b:`Kurs ${fmtP(m.last)} ${cy(m.market)} · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} ${cy(m.market)} · Ziel ${fmtP(r.t1)} ${cy(m.market)}`,ev:r.ev});
     st.notified[key]={s:on,t:now}}
   for(const [mk,p] of Object.entries(st.pos)){const tk=tick24[mk];if(!tk){console.warn('Kein Kurs für',mk);continue}
     const last=+tk.last,a=results[mk]?results[mk].d.A.at(-1):last*0.02;
@@ -885,16 +889,16 @@ async function main(){
     const adv=advice(mk,p,last);if(last>=p.tp)p.tpHit=true;
     const key='s:'+mk,prev=st.notified[key];
     console.log(`Position ${mk}: ${adv.label} (${pct(adv.pnl)})`);
-    if(adv.act!=='hold'&&!(prev&&prev.s===adv.act))sells.push({t:`${adv.label}: ${mk.replace('-EUR','')}`,b:`${adv.why}. ${pct(adv.pnl)} seit Kauf${adv.eur!=null?` (${adv.eur>=0?'+':''}${adv.eur.toFixed(2)} €)`:''}, Kurs ${fmtP(last)} €`});
+    if(adv.act!=='hold'&&!(prev&&prev.s===adv.act))sells.push({t:`${adv.label}: ${mk.split('-')[0]}`,b:`${adv.why}. ${pct(adv.pnl)} seit Kauf${adv.eur!=null?` (${adv.eur>=0?'+':''}${adv.eur.toFixed(2)} ${cy(mk)})`:''}, Kurs ${fmtP(last)} ${cy(mk)}`});
     st.notified[key]={s:adv.act,t:now}}
 
-  for(const c of confirmations){const b=c.mk?.replace('-EUR','');
-    if(c.kind==='add'){const s=c.snap,p=st.pos[c.mk];await push(c.nach?`Nachkauf eingetragen: ${b}`:`Kauf eingetragen: ${b}`,(c.nach?`+${c.nach} zu ${fmtP(c.preis)} €. Neuer Durchschnittspreis ${fmtP(s.buy)} €, Bestand ${+s.qty.toFixed(8)}`:`Kaufpreis ${fmtP(s.buy)} €${s.qty?`, Menge ${s.qty}`:''}`)+`${s.cost?`, Einsatz inkl. Gebühr ${s.cost.toFixed(2)} €`:''}.`+(p&&p.stop!=null?` Stop ${fmtP(p.stop)} €, Ziel ${fmtP(p.tp)} €. Ich melde mich, sobald du verkaufen solltest.`:''),3,'white_check_mark')}
-    else if(c.kind==='part')await push(`Teilverkauf eingetragen: ${b}`,`${+c.q.toFixed(8)} verkauft${c.sell?` zu ${fmtP(c.sell)} €`:''}${c.net!=null?`, Erlös nach Gebühr ${c.net.toFixed(2)} €`:''}${c.eur!=null?`, Ergebnis ${c.eur>=0?'+':''}${c.eur.toFixed(2)} €`:''}. Restbestand ${+c.rest.toFixed(8)}, wird weiter überwacht.`,3,'white_check_mark');
-    else if(c.kind==='del')await push(`Verkauf eingetragen: ${b}`,c.sell?`Ergebnis ${c.eur!=null?`${c.eur>=0?'+':''}${c.eur.toFixed(2)} € nach Gebühren`:pct(((c.sell*(1-FEE))/(c.buy*(1+FEE))-1)*100)+' nach Gebühren'} (Kauf ${fmtP(c.buy)} €, Verkauf ${fmtP(c.sell)} €).`:'Position entfernt.',3,'white_check_mark');
+  for(const c of confirmations){const b=c.mk?.split('-')[0],C=cy(c.mk),FEE=feeOf(c.mk);
+    if(c.kind==='add'){const s=c.snap,p=st.pos[c.mk];await push(c.nach?`Nachkauf eingetragen: ${b}`:`Kauf eingetragen: ${b}`,(c.nach?`+${c.nach} zu ${fmtP(c.preis)} ${C}. Neuer Durchschnittspreis ${fmtP(s.buy)} ${C}, Bestand ${+s.qty.toFixed(8)}`:`Kaufpreis ${fmtP(s.buy)} ${C}${s.qty?`, Menge ${s.qty}`:''}`)+`${s.cost?`, Einsatz inkl. Gebühr ${s.cost.toFixed(2)} ${C}`:''}.`+(p&&p.stop!=null?` Stop ${fmtP(p.stop)} ${C}, Ziel ${fmtP(p.tp)} ${C}. Ich melde mich, sobald du verkaufen solltest.`:''),3,'white_check_mark')}
+    else if(c.kind==='part')await push(`Teilverkauf eingetragen: ${b}`,`${+c.q.toFixed(8)} verkauft${c.sell?` zu ${fmtP(c.sell)} ${C}`:''}${c.net!=null?`, Erlös nach Gebühr ${c.net.toFixed(2)} ${C}`:''}${c.eur!=null?`, Ergebnis ${c.eur>=0?'+':''}${c.eur.toFixed(2)} ${C}`:''}. Restbestand ${+c.rest.toFixed(8)}, wird weiter überwacht.`,3,'white_check_mark');
+    else if(c.kind==='del')await push(`Verkauf eingetragen: ${b}`,c.sell?`Ergebnis ${c.eur!=null?`${c.eur>=0?'+':''}${c.eur.toFixed(2)} ${C} nach Gebühren`:pct(((c.sell*(1-FEE))/(c.buy*(1+FEE))-1)*100)+' nach Gebühren'} (Kauf ${fmtP(c.buy)} ${C}, Verkauf ${fmtP(c.sell)} ${C}).`:'Position entfernt.',3,'white_check_mark');
     else if(c.kind==='unknown')await push(`${b} nicht im Bestand`,'Zu diesem Coin ist kein Kauf eingetragen.',2,'grey_question');
-    else if(c.kind==='list'){const L=Object.entries(st.pos);await push('Deine Positionen',L.length?L.map(([mk,p])=>{const last=+(tick24[mk]?.last||0);const a=advice(mk,p,last);return `${mk.replace('-EUR','')}: ${pct(a.pnl)}${a.eur!=null?` (${a.eur>=0?'+':''}${a.eur.toFixed(2)} €)`:''} · ${a.label}`}).join('\n'):'Keine Positionen eingetragen.',2,'clipboard')}
-    else await push('Befehl nicht verstanden',`«${c.t.slice(0,60)}». Beispiele: «kauf BTC 61500 0.02», «verkauf BTC 63000» (alles), «verkauf BTC 63000 0.01» (Teil), «liste».`,2,'grey_question');
+    else if(c.kind==='list'){const L=Object.entries(st.pos);await push('Deine Positionen',L.length?L.map(([mk,p])=>{const last=+(tick24[mk]?.last||0);const a=advice(mk,p,last);return `${mk.split('-')[0]}: ${pct(a.pnl)}${a.eur!=null?` (${a.eur>=0?'+':''}${a.eur.toFixed(2)} ${cy(mk)})`:''} · ${a.label}`}).join('\n'):'Keine Positionen eingetragen.',2,'clipboard')}
+    else await push('Befehl nicht verstanden',`«${c.t.slice(0,60)}». Beispiele: «kauf BTC-USDC 71500 0.02», «verkauf BTC-USDC 73000» (alles), «verkauf BTC-USDC 73000 0.01» (Teil), «liste». Ohne -USDC gilt der EUR-Markt.`,2,'grey_question');
   }
   for(const s of sells)await push(s.t,s.b,5,'warning');
   buys.sort((a,b)=>b.ev-a.ev);

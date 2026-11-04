@@ -194,7 +194,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
   </section>
 
   <section class="panel" style="padding:12px 14px;display:flex;flex-direction:column;gap:8px">
-    <span class="lbl">Trending auf CoinGecko · markiert = auf der Bitvavo-Beobachtungsliste (&gt; 50k € am letzten Tag und &gt; 1 Mio. € in 30 Tagen)</span>
+    <span class="lbl">Trending auf CoinGecko · markiert = auf der Bitvavo-Beobachtungsliste (USDC-Märkte mit &gt; 50k $ am letzten Tag und &gt; 1 Mio. $ in 30 Tagen)</span>
     <div class="trend-list" id="trending"><span class="muted">lädt…</span></div>
   </section>
 
@@ -205,7 +205,7 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 
   <section class="panel" aria-label="Papierhandel" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline"><h2>Papierhandel</h2><span class="muted" id="paperTime" style="font-size:12px"></span></div>
-    <p class="hint">So würde der Bot über die Bitvavo-API handeln, simuliert und ohne echtes Geld. Er kauft bei jedem «Starker Kauf» für 100 € (Startkapital 1'000 €, höchstens 10 Positionen) und verkauft nach Plan: Stop-Loss, nachziehender Stop, Ziel oder spätestens nach der Haltedauer. Zwei Varianten: mit Limit-Orders (0,15 % Gebühr, Order verfällt nach 15 Minuten) und mit Marktorders (0,25 %). Daneben stehen deine eigenen Trades seit dem Start.</p>
+    <p class="hint">So würde der Bot über die Bitvavo-API handeln, simuliert und ohne echtes Geld. Er handelt gegen USDC und kauft bei jedem «Starker Kauf» für 100 $ (Startkapital 1'000 $, höchstens 10 Positionen) und verkauft nach Plan: Stop-Loss, nachziehender Stop, Ziel oder spätestens nach der Haltedauer. Zwei Varianten: mit Limit-Orders (Order verfällt nach 15 Minuten) und mit Marktorders, beide mit 0,05 % Gebühr. Neustart in USDC am 4.11.2026. Daneben stehen deine eigenen Trades seit dem Start.</p>
     <div id="paper"><div class="muted">Wird geladen…</div></div>
   </section>
 
@@ -286,20 +286,24 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
 <script>
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
-const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k € am letzten Tag UND > 1 Mio. € in den letzten 30 Tagen
-// Umsatz in € der letzten h Stunden aus den Kerzen; null, wenn die geladenen Kerzen dafür nicht weit genug zurückreichen
+const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k $ am letzten Tag UND > 1 Mio. $ in den letzten 30 Tagen (USDC-Märkte)
+// Gehandelt wird gegen USDC (Gebühr 0,05 %). Alte Positionen aus EUR-Märkten bleiben in EUR (0,25 %), bis sie verkauft sind.
+const QS='-USDC';
+const isEur=mk=>!!mk&&mk.endsWith('-EUR'), feeOf=mk=>isEur(mk)?0.0025:0.0005, cy=mk=>isEur(mk)?'€':'$';
+let EURUSD=1.1;   // US-Dollar je Euro, aus dem Bitvavo-Markt USDC-EUR
+// Umsatz in Handelswährung der letzten h Stunden aus den Kerzen; null, wenn die geladenen Kerzen dafür nicht weit genug zurückreichen
 const volSum=(d,h)=>{const n=Math.round(h/TFH[TF]);if(d.c.length<n&&d.c.length>=HIST)return null;let s=0;for(let i=Math.max(0,d.c.length-n);i<d.c.length;i++)s+=d.v[i]*d.c[i];return s};
 const vol3d=d=>volSum(d,72)??0;
-const eligible=m=>m.vol>=MIN_VOL&&(m.vol30d??0)>=MIN_VOL30;
+const eligible=m=>!isEur(m.market)&&m.vol>=MIN_VOL&&(m.vol30d??0)>=MIN_VOL30;
 const SRBARS={'15m':96,'1h':48,'4h':30};   // Bars für Unterstützung/Widerstand
 const DAY={'15m':96,'1h':24,'4h':6};       // Bars pro 24h
 const TFH={'15m':.25,'1h':1,'4h':4};       // Stunden pro Kerze
 const TFMS={'15m':9e5,'1h':36e5,'4h':144e5};
-const FEE=0.0025;  // Gebühr pro Seite (Bitvavo Taker 0,25 %)
+const FEE=0.0005;  // Gebühr pro Seite (Bitvavo USDC-Märkte 0,05 %)
 // Trade-Aufbau: Risiko R = max(sl × ATR, minRisk × Kurs), Ziel = tp × R, Haltedauer h Stunden.
 // Der GitHub-Bot testet regelmässig, welcher Aufbau nach Gebühren am besten funktioniert, und veröffentlicht ihn.
 let GEO={sl:2,minRisk:0.02,tp:2,h:24};
-const STABLE=new Set(['USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
+const STABLE=new Set(['USDCV','EUROP','EURCV','USDC','USDT','EURC','DAI','EURT','PYUSD','FDUSD','TUSD','USDE','EURI','USDS','RLUSD','EURQ','EURR']);
 const riskOf=(e,a)=>Math.max(GEO.sl*a,GEO.minRisk*e);
 const horBars=()=>Math.max(2,Math.round(GEO.h/TFH[TF]));
 const HIST=1000, RETRAIN_MS=30*60e3;
@@ -331,7 +335,7 @@ function adx(h,l,c,n=14){const N=c.length,P=Array(N).fill(0),M=Array(N).fill(0),
 function priorMax(h,w){const o=Array(h.length).fill(null),q=[];for(let i=0;i<h.length;i++){while(q.length&&q[0]<i-w)q.shift();o[i]=q.length?h[q[0]]:null;while(q.length&&h[q[q.length-1]]<=h[i])q.pop();q.push(i)}return o}
 // Marktlage Bitcoin je Zeitpunkt: [24h-Veränderung, Trend über/unter EMA 50]
 let BTCX=new Map();
-function setBtc(src=data){BTCX=new Map();const d=src['BTC-EUR'];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
+function setBtc(src=data){BTCX=new Map();const d=src['BTC'+QS];if(!d)return;const D=DAY[TF];for(let i=0;i<d.c.length;i++)BTCX.set(d.ts[i],[i>=D?d.c[i]/d.c[i-D]-1:0,d.c[i]>d.e50[i]?1:-1])}
 // Zusätzliche Daten, die Bitvavo-Kerzen nicht enthalten: Fear & Greed (Tag), Orderbuch je Markt (Stunde), CoinGecko-Marktdaten (Stunde)
 const EXT={fg:new Map(),ob:new Map(),cg:new Map()},HOUR=36e5,DAYMS=864e5;
 function fgAt(ts){const v=EXT.fg.get(Math.floor(ts/DAYMS)*DAYMS);return v==null?null:v}
@@ -389,7 +393,7 @@ const FEATS=[
  {g:'fg',n:'Extreme Angst (F&G < 25)',f:(d,i)=>{const v=fgAt(d.ts[i]);return v==null?NaN:v<25?1:0},t:()=>'Extreme Angst am Markt'},
  // Orderbuch (wird vom Bot gesammelt)
  {g:'ob',n:'Spread',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.spread+0.01)+1,-1,3):NaN},t:v=>'Spread '+(10**(v-1)-0.01).toFixed(2)+' %'},
- {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' €'},
+ {g:'ob',n:'Markttiefe ±2 %',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?clip(Math.log10(o.b2+o.a2+1)-4,-3,3):NaN},t:v=>'Markttiefe ±2 %: '+fmtV(10**(v+4))+' $'},
  {g:'ob',n:'Orderbuch-Ungleichgewicht',num:1,f:(d,i)=>{const o=obAt(d.mk,d.ts[i]);return o?o.imb:NaN},t:v=>v>0?'Mehr Kauf- als Verkaufsaufträge nahe am Kurs':'Mehr Verkaufs- als Kaufaufträge nahe am Kurs'},
  // CoinGecko-Marktdaten (werden vom Bot gesammelt)
  {g:'cg',n:'Gesamtmarkt 24h',num:1,f:(d,i)=>{const c=cgAt(d.ts[i]);return c&&c.chg!=null?clip(c.chg/5,-2,2):NaN},t:v=>'Krypto-Gesamtmarkt 24h '+pct(v*5)},
@@ -494,7 +498,8 @@ async function fillVol30(){
 }
 async function loadMarkets(){
   const t=await j(API+'/ticker/24h');
-  return t.filter(x=>x.market&&x.market.endsWith('-EUR')&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||pf.some(p=>p.m===x.market)))
+  const fx=t.find(x=>x.market==='USDC-EUR');if(fx&&+fx.last>0)EURUSD=1/+fx.last;
+  return t.filter(x=>x.market&&(x.market.endsWith(QS)||pf.some(p=>p.m===x.market))&&!STABLE.has(x.market.split('-')[0])&&+x.last>0&&(+x.volumeQuote>=MIN_VOL||pf.some(p=>p.m===x.market)))
     .map(x=>({market:x.market,base:x.market.split('-')[0],last:+x.last,open:+x.open,vol:+x.volumeQuote,chg:x.open>0?(x.last-x.open)/x.open*100:0}))
     .sort((a,b)=>b.vol-a.vol);
 }
@@ -541,7 +546,7 @@ async function run(force){
     loadPaper();
     render();renderMood();renderCands();renderModel();renderJournal();renderPf();renderLog();
     if(!selected&&window.innerWidth>900){const best=sorted()[0];if(best)select(best.market)}else if(selected&&!$('#posBox')?.contains(document.activeElement))renderDetail();
-    setStat(`${markets.filter(eligible).length} Märkte (>50k €/24h, >1 Mio. €/30T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
+    setStat(`${markets.filter(eligible).length} USDC-Märkte (>50k $/24h, >1 Mio. $/30T) · Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Kurse jede Minute, Modell alle 30 Min neu`,'live');
   }catch(e){
     console.error(e);setStat('Fehler beim Laden','err');
     if(!Object.keys(results).length)$('#list').innerHTML=`<div class="empty"><div class="err-box"><b>Daten konnten nicht geladen werden</b> (${e.message}).<br><br>Die Vorschau in der Claude-App sperrt Internetabrufe. Öffne die Datei stattdessen in Chrome: Datei herunterladen und in den Downloads mit Chrome öffnen, oder die Datei auf einer Webseite wie Netlify Drop hochladen und den Link aufrufen.</div></div>`;
@@ -574,7 +579,7 @@ function renderJournal(){
     <div><span class="lbl">Trefferquote</span><b class="${done.length?(w/done.length>=.4?'up':'down'):''}">${done.length?(w/done.length*100).toFixed(0)+'%':'–'}</b></div>
     <div><span class="lbl">Ø Ergebnis</span><b class="${avg>0?'up':avg<0?'down':''}">${done.length?fmtR(avg):'–'}</b></div>`;
   const lab={open:'offen',win:'Ziel',loss:'Stop',time:'Zeit'};
-  $('#jList').innerHTML=journal.length?journal.slice().reverse().slice(0,40).map(e=>`<div class="jrow"><span class="tag ${e.st}">${lab[e.st]}${e.r!=null?' '+(e.r>0?'+':'')+e.r.toFixed(1):''}</span><span><b>${e.m.replace('-EUR','')}</b> <span class="muted">${e.tf} · ${e.sig}</span></span><span class="num muted">${new Date(e.t).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="num">${fmtP(e.entry)}</span></div>`).join('')
+  $('#jList').innerHTML=journal.length?journal.slice().reverse().slice(0,40).map(e=>`<div class="jrow"><span class="tag ${e.st}">${lab[e.st]}${e.r!=null?' '+(e.r>0?'+':'')+e.r.toFixed(1):''}</span><span><b>${e.m.split('-')[0]}</b> <span class="muted">${e.tf} · ${e.sig}</span></span><span class="num muted">${new Date(e.t).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="num">${fmtP(e.entry)}</span></div>`).join('')
     :'<div class="muted" style="padding:8px 0">Noch keine Einträge. Sobald das Modell ein Kauf-Signal gibt, wird es hier gespeichert und automatisch ausgewertet.</div>';
 }
 function resetUI(){$('#jReset').innerHTML='<button id="jClear">Journal leeren</button>';$('#jClear').addEventListener('click',askClear)}
@@ -588,8 +593,8 @@ function atrOf(mk,price){const r=results[mk];return r?r.d.A[r.d.c.length-1]:pric
 // Kauf eintragen; gibt es den Coin schon (mit Menge), wird nachgekauft und der Durchschnittspreis berechnet
 function addPos(mk,price,qty){
   const a=atrOf(mk,price),cur=curOf(mk)||price,ex=pf.find(p=>p.m===mk);
-  let buy=price,q=qty||null,cost=qty?price*qty*(1+FEE):null,t=Date.now();
-  if(ex&&ex.qty&&qty){q=ex.qty+qty;cost=(ex.cost??ex.buy*ex.qty*(1+FEE))+price*qty*(1+FEE);buy=(ex.buy*ex.qty+price*qty)/q;t=ex.t}
+  let buy=price,q=qty||null,cost=qty?price*qty*(1+feeOf(mk)):null,t=Date.now();
+  if(ex&&ex.qty&&qty){q=ex.qty+qty;cost=(ex.cost??ex.buy*ex.qty*(1+feeOf(mk)))+price*qty*(1+feeOf(mk));buy=(ex.buy*ex.qty+price*qty)/q;t=ex.t}
   pf=pf.filter(p=>p.m!==mk);
   const R=riskOf(buy,a);pf.push({m:mk,buy,qty:q,cost,t,stop:buy-R,tp:buy+GEO.tp*R,high:Math.max(buy,cur),tpHit:cur>=buy+GEO.tp*R});
   store('bvr-pf',pf);
@@ -597,7 +602,7 @@ function addPos(mk,price,qty){
 // Verkauf eintragen: ganze Position oder ein Teil davon (Ergebnis nach Gebühren)
 function closePos(mk,price,qty){
   const p=pf.find(x=>x.m===mk);if(!p)return;
-  const all=!p.qty||!qty||qty>=p.qty*0.9999,q=all?p.qty:qty,cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null;
+  const FEE=feeOf(mk),all=!p.qty||!qty||qty>=p.qty*0.9999,q=all?p.qty:qty,cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null;
   const cs=cost&&q?cost*q/p.qty:null,net=q?q*price*(1-FEE):null;
   const pnl=cs?(net/cs-1)*100:((price*(1-FEE))/(p.buy*(1+FEE))-1)*100;
   closed.push({m:mk,buy:p.buy,sell:price,qty:q,t:p.t,end:Date.now(),pnl,eur:cs?net-cs:null,teil:!all});
@@ -608,41 +613,42 @@ function closePos(mk,price,qty){
 function advice(p){
   const last=curOf(p.m);if(last==null)return{act:'na',label:'Keine Kursdaten',cls:'s0',why:'Markt aktuell nicht abrufbar',pnl:0,eur:null,eff:p.stop};
   // Ergebnis nach Gebühren für Kauf und Verkauf
-  const cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,eur=p.qty?p.qty*last*(1-FEE)-cost:null;
+  const FEE=feeOf(p.m),C=cy(p.m),cost=p.qty?(p.cost??p.buy*p.qty*(1+FEE)):null,eur=p.qty?p.qty*last*(1-FEE)-cost:null;
   const r=results[p.m],a=atrOf(p.m,last),pnl=cost?eur/cost*100:((last*(1-FEE))/(p.buy*(1+FEE))-1)*100;
   const R=riskOf(p.buy,a),trail=p.high>=p.buy+R?p.high-R:-Infinity;
   const eff=Math.max(p.tpHit?Math.max(p.stop,p.buy):p.stop,trail);
   const o={pnl,eur,eff,last};
-  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',cls:'sm2',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} € unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} € erreicht, Verlust begrenzen`};
-  if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',cls:'take',why:`Ziel ${fmtP(p.tp)} € erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} €`};
-  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',cls:'sm1',why:pnl>0?`Modell zählt ${p.m.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins, Gewinn von ${pct(pnl)} sichern`:`Modell zählt ${p.m.replace('-EUR','')} jetzt zu den schwächsten 20 % aller Coins, Verlust nicht weiter laufen lassen`};
+  if(last<=eff)return{...o,act:'stop',label:'Verkaufen',cls:'sm2',why:eff>=p.buy?`Nachlaufender Stop bei ${fmtP(eff)} ${C} unterschritten, Gewinn sichern`:`Stop-Loss bei ${fmtP(eff)} ${C} erreicht, Verlust begrenzen`};
+  if(last>=p.tp)return{...o,act:'take',label:'Gewinn mitnehmen',cls:'take',why:`Ziel ${fmtP(p.tp)} ${C} erreicht: etwa die Hälfte verkaufen, Stop für den Rest auf Einstand ${fmtP(p.buy)} ${C}`};
+  if(r&&r.cal.q<=1)return{...o,act:'signal',label:'Verkaufen',cls:'sm1',why:pnl>0?`Modell zählt ${p.m.split('-')[0]} jetzt zu den schwächsten 20 % aller Coins, Gewinn von ${pct(pnl)} sichern`:`Modell zählt ${p.m.split('-')[0]} jetzt zu den schwächsten 20 % aller Coins, Verlust nicht weiter laufen lassen`};
   if(r&&pnl>0&&r.rsi>75)return{...o,act:'secure',label:'Teilgewinn sichern',cls:'take',why:`RSI ${r.rsi.toFixed(0)} stark überkauft, Rücksetzer wahrscheinlich`};
-  return{...o,act:'hold',label:'Halten',cls:'s0',why:`Stop bei ${fmtP(eff)} €, Ziel bei ${fmtP(p.tp)} €${r?`, Modell ${r.sig[1].toLowerCase()}`:''}`};
+  return{...o,act:'hold',label:'Halten',cls:'s0',why:`Stop bei ${fmtP(eff)} ${C}, Ziel bei ${fmtP(p.tp)} ${C}${r?`, Modell ${r.sig[1].toLowerCase()}`:''}`};
 }
 function pfUpdate(){pf.forEach(p=>{const l=curOf(p.m);if(l==null)return;p.high=Math.max(p.high,l);if(l>=p.tp)p.tpHit=true});store('bvr-pf',pf)}
 function renderPf(){
   if(paper)renderPaper();
   const el=$('#pfList');
   if(!pf.length){el.innerHTML='<div class="muted" style="padding:6px 0">Noch keine Coins eingetragen. Tippe in der Liste auf einen Coin und trage unter «Meine Position» deinen Kauf ein.</div>';}
-  else el.innerHTML=pf.map(p=>{const a=advice(p),b=p.m.replace('-EUR','');return `<div class="pfrow" tabindex="0" data-m="${p.m}">
-    <div><b class="sym">${b}</b><div class="muted num" style="font-size:11px">${p.qty?fmtQ(p.qty,qDec(p.m,p.buy))+' × ':''}${fmtP(p.buy)} € → ${a.last!=null?fmtP(a.last):'–'} €</div></div>
-    <div class="num ${a.pnl>=0?'up':'down'}" style="text-align:right">${pct(a.pnl)}${a.eur!=null?`<div style="font-size:11px">${a.eur>=0?'+':''}${a.eur.toFixed(2)} €</div>`:''}</div>
+  else el.innerHTML=pf.map(p=>{const a=advice(p),b=p.m.split('-')[0];return `<div class="pfrow" tabindex="0" data-m="${p.m}">
+    <div><b class="sym">${b}</b><div class="muted num" style="font-size:11px">${p.qty?fmtQ(p.qty,qDec(p.m,p.buy))+' × ':''}${fmtP(p.buy)} ${cy(p.m)} → ${a.last!=null?fmtP(a.last):'–'} ${cy(p.m)}</div></div>
+    <div class="num ${a.pnl>=0?'up':'down'}" style="text-align:right">${pct(a.pnl)}${a.eur!=null?`<div style="font-size:11px">${a.eur>=0?'+':''}${a.eur.toFixed(2)} ${cy(p.m)}</div>`:''}</div>
     <div style="text-align:right"><span class="pill ${a.cls}">${a.label}</span></div>
     <div class="muted" style="grid-column:1/-1;font-size:12px">${a.why}</div></div>`}).join('');
   // Gesamtübersicht: nur Positionen mit bekannter Menge und aktuellem Kurs
-  const known=pf.filter(p=>p.qty&&curOf(p.m)!=null),missing=pf.filter(p=>!p.qty).map(p=>p.m.replace('-EUR',''));
-  const inv=known.reduce((s,p)=>s+(p.cost??p.buy*p.qty*(1+FEE)),0),val=known.reduce((s,p)=>s+p.qty*curOf(p.m)*(1-FEE),0),gl=val-inv,glp=inv?gl/inv*100:0;
+  const known=pf.filter(p=>p.qty&&curOf(p.m)!=null),missing=pf.filter(p=>!p.qty).map(p=>p.m.split('-')[0]);
+  const toUsd=(v,mk)=>isEur(mk)?v*EURUSD:v;
+  const inv=known.reduce((s,p)=>s+toUsd(p.cost??p.buy*p.qty*(1+feeOf(p.m)),p.m),0),val=known.reduce((s,p)=>s+toUsd(p.qty*curOf(p.m)*(1-feeOf(p.m)),p.m),0),gl=val-inv,glp=inv?gl/inv*100:0;
   const sells=pf.filter(p=>!['hold','na'].includes(advice(p).act)).length;
   $('#pfStats').hidden=!known.length;
-  $('#pfStats').innerHTML=known.length?`<div><span class="lbl">Aktueller Wert</span><b>${val.toFixed(2)} €</b></div>
-    <div><span class="lbl">Investiert</span><b>${inv.toFixed(2)} €</b></div>
-    <div><span class="lbl">Gewinn / Verlust</span><b class="${gl>=0?'up':'down'}">${gl>=0?'+':''}${gl.toFixed(2)} €</b></div>
+  $('#pfStats').innerHTML=known.length?`<div><span class="lbl">Aktueller Wert</span><b>${val.toFixed(2)} $</b></div>
+    <div><span class="lbl">Investiert</span><b>${inv.toFixed(2)} $</b></div>
+    <div><span class="lbl">Gewinn / Verlust</span><b class="${gl>=0?'up':'down'}">${gl>=0?'+':''}${gl.toFixed(2)} $</b></div>
     <div><span class="lbl">Gewinn / Verlust %</span><b class="${gl>=0?'up':'down'}">${pct(glp)}</b></div>
-    <div class="muted" style="grid-column:1/-1;font-size:12px">Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Wert nach Verkaufsgebühr, Investiert inkl. Kaufgebühr${missing.length?` · ohne ${missing.join(', ')} (Menge fehlt)`:''}</div>`:'';
+    <div class="muted" style="grid-column:1/-1;font-size:12px">Stand ${new Date().toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})} · Wert nach Verkaufsgebühr, Investiert inkl. Kaufgebühr${known.some(p=>isEur(p.m))?` · EUR-Positionen umgerechnet zu ${EURUSD.toFixed(4)} $/€`:''}${missing.length?` · ohne ${missing.join(', ')} (Menge fehlt)`:''}</div>`:'';
   $('#pfSum').innerHTML=pf.length?`${pf.length} Position${pf.length>1?'en':''}${sells?` · <span class="down">${sells} mit Handlungsbedarf</span>`:''}`:'';
   const real=closed.length?closed.reduce((s,c)=>s+c.pnl,0)/closed.length:null;
-  const realEur=closed.reduce((s,c)=>s+(c.eur||0),0),hasEur=closed.some(c=>c.eur!=null);
-  $('#pfClosed').textContent=closed.length?`Abgeschlossene Verkäufe: ${closed.length}, davon ${closed.filter(c=>c.pnl>0).length} im Gewinn, Ø ${pct(real)}${hasEur?` · realisiert ${realEur>=0?'+':''}${realEur.toFixed(2)} €`:''}`:'';
+  const realEur=closed.reduce((s,c)=>s+(c.eur||0)*(isEur(c.m)?EURUSD:1),0),hasEur=closed.some(c=>c.eur!=null);
+  $('#pfClosed').textContent=closed.length?`Abgeschlossene Verkäufe: ${closed.length}, davon ${closed.filter(c=>c.pnl>0).length} im Gewinn, Ø ${pct(real)}${hasEur?` · realisiert ${realEur>=0?'+':''}${realEur.toFixed(2)} $`:''}`:'';
 }
 /* ---------- Kauf- und Verkaufsmaske: Betrag wählen, Stückzahl nach Gebühren berechnen ---------- */
 const AMOUNTS=[50,100,150,200];let draft={},mkInfo={};
@@ -653,7 +659,7 @@ const numStr=v=>{const s=(+v).toFixed(12);return s.includes('.')?s.replace(/\.?0
 const fmtQ=(q,d=8)=>(+q).toLocaleString('de-CH',{maximumFractionDigits:d});
 // Kauf: Betrag = was du insgesamt zahlst (inkl. Gebühr). Verkauf: Betrag = was du nach Gebühr erhältst.
 function tradeCalc(m,p,dr){
-  const price=+dr.price>0?+dr.price:m.last,d=qDec(m.market,price),min=mkInfo[m.market]?.min||5,sell=dr.mode==='sell';
+  const price=+dr.price>0?+dr.price:m.last,d=qDec(m.market,price),min=mkInfo[m.market]?.min||5,sell=dr.mode==='sell',FEE=feeOf(m.market);
   let q=0;
   if(dr.qtyManual&&+dr.qty>0)q=+dr.qty;
   else if(sell&&dr.amt==='all')q=p?.qty||0;
@@ -661,26 +667,26 @@ function tradeCalc(m,p,dr){
   let warn='';
   if(sell&&p?.qty&&q>p.qty){q=p.qty;warn='Mehr als dein Bestand: auf den ganzen Bestand begrenzt.'}
   const kw=q*price,fee=kw*FEE;
-  if(kw>0&&kw<min)warn=`Bitvavo verlangt mindestens ${min} € pro Auftrag.`;
+  if(kw>0&&kw<min)warn=`Bitvavo verlangt mindestens ${min} ${cy(m.market)} pro Auftrag.`;
   const out={q,d,price,kw,fee,warn,sell};
   if(sell){out.net=kw-fee;if(p?.qty){const cost=p.cost??p.buy*p.qty*(1+FEE);out.res=out.net-cost*q/p.qty}}else out.total=kw+fee;
   return out;
 }
 function calcText(m,c){
-  const b=m.base;if(!(c.q>0))return '<span class="muted">Betrag wählen oder Menge eingeben.</span>';
-  const head=c.sell?`Du verkaufst <b>${fmtQ(c.q,c.d)} ${b}</b> zu ${fmtP(c.price)} €`:`Du kaufst <b>${fmtQ(c.q,c.d)} ${b}</b> zu ${fmtP(c.price)} €`;
-  const body=c.sell?`Kurswert ${c.kw.toFixed(2)} € − Gebühr ${c.fee.toFixed(2)} € = <b>${c.net.toFixed(2)} € Erlös</b>${c.res!=null?` · Ergebnis <b class="${c.res>=0?'up':'down'}">${c.res>=0?'+':''}${c.res.toFixed(2)} €</b>`:''}`
-    :`Kurswert ${c.kw.toFixed(2)} € + Gebühr ${c.fee.toFixed(2)} € = <b>${c.total.toFixed(2)} € total</b>`;
+  const b=m.base,C=cy(m.market);if(!(c.q>0))return '<span class="muted">Betrag wählen oder Menge eingeben.</span>';
+  const head=c.sell?`Du verkaufst <b>${fmtQ(c.q,c.d)} ${b}</b> zu ${fmtP(c.price)} ${C}`:`Du kaufst <b>${fmtQ(c.q,c.d)} ${b}</b> zu ${fmtP(c.price)} ${C}`;
+  const body=c.sell?`Kurswert ${c.kw.toFixed(2)} ${C} − Gebühr ${c.fee.toFixed(2)} ${C} = <b>${c.net.toFixed(2)} ${C} Erlös</b>${c.res!=null?` · Ergebnis <b class="${c.res>=0?'up':'down'}">${c.res>=0?'+':''}${c.res.toFixed(2)} ${C}</b>`:''}`
+    :`Kurswert ${c.kw.toFixed(2)} ${C} + Gebühr ${c.fee.toFixed(2)} ${C} = <b>${c.total.toFixed(2)} ${C} total</b>`;
   return `${head}<br>${body}${c.warn?`<br><span class="down">${c.warn}</span>`:''}`;
 }
 function tradeForm(m,p,dr){
   const sell=dr.mode==='sell',noQty=sell&&!p?.qty,c=tradeCalc(m,p,dr);
   return `<div class="trade">
     <span class="lbl">${sell?'Verkaufen für (Erlös nach Gebühr)':'Kaufen für (inkl. Gebühr)'}</span>
-    <div class="chips">${AMOUNTS.map(a=>`<button type="button" class="chip${dr.amt===a&&!dr.custom?' on':''}" data-amt="${a}"${noQty?' disabled':''}>${a} €</button>`).join('')}${sell?`<button type="button" class="chip${dr.amt==='all'?' on':''}" data-amt="all">Alles</button>`:''}
-      <label class="chipin"><input id="trAmt" type="number" inputmode="decimal" step="any" min="0" placeholder="Betrag" aria-label="Eigener Betrag in Euro" value="${dr.custom??''}"${noQty?' disabled':''}> €</label></div>
+    <div class="chips">${AMOUNTS.map(a=>`<button type="button" class="chip${dr.amt===a&&!dr.custom?' on':''}" data-amt="${a}"${noQty?' disabled':''}>${a} ${cy(m.market)}</button>`).join('')}${sell?`<button type="button" class="chip${dr.amt==='all'?' on':''}" data-amt="all">Alles</button>`:''}
+      <label class="chipin"><input id="trAmt" type="number" inputmode="decimal" step="any" min="0" placeholder="Betrag" aria-label="Eigener Betrag in ${isEur(m.market)?'Euro':'US-Dollar'}" value="${dr.custom??''}"${noQty?' disabled':''}> ${cy(m.market)}</label></div>
     ${noQty?'<p class="hint" style="margin:0">Die Menge dieser Position ist unbekannt. Trag sie unten nach, dann kannst du auch Teilbeträge verkaufen.</p>':''}
-    <div class="posform"><label>Kurs €<input id="trPrice" type="number" inputmode="decimal" step="any" value="${dr.price||m.last}"></label>
+    <div class="posform"><label>Kurs ${cy(m.market)}<input id="trPrice" type="number" inputmode="decimal" step="any" value="${dr.price||m.last}"></label>
       <label>Menge ${m.base}<input id="trQty" type="number" inputmode="decimal" step="any" min="0" value="${c.q>0?numStr(c.q):''}"></label></div>
     <div class="calc" id="trCalc">${calcText(m,c)}</div>
     <div class="posform"><button type="button" id="trOk" class="primary">${sell?'Verkauf eintragen':p?'Nachkauf eintragen':'Als gekauft eintragen'}</button>${p?'<button type="button" id="trNo">Abbrechen</button>':''}</div>
@@ -691,7 +697,7 @@ function posHtml(m,r){
   if(!p)return `<span class="lbl">Meine Position</span>${tradeForm(m,null,dr&&dr.mode==='buy'?dr:(draft[m.market]={mode:'buy',amt:null,custom:null,price:'',qty:'',qtyManual:false}))}<span class="muted" id="botNote" style="font-size:12px"></span>`;
   const a=advice(p);
   return `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center"><span class="lbl">Meine Position</span><span class="pill ${a.cls}">${a.label}</span></div>
-    <div class="kv"><div><span class="lbl">Kaufpreis</span><b>${fmtP(p.buy)}</b></div><div><span class="lbl">Bestand</span><b>${p.qty?fmtQ(p.qty,qDec(m.market,p.buy)):'unbekannt'}</b></div><div><span class="lbl">Ergebnis nach Gebühren</span><b class="${a.pnl>=0?'up':'down'}">${pct(a.pnl)}${a.eur!=null?` · ${a.eur>=0?'+':''}${a.eur.toFixed(2)} €`:''}</b></div><div><span class="lbl">Aktiver Stop</span><b class="down">${fmtP(a.eff)}</b></div><div><span class="lbl">Ziel</span><b class="up">${fmtP(p.tp)}</b></div></div>
+    <div class="kv"><div><span class="lbl">Kaufpreis</span><b>${fmtP(p.buy)}</b></div><div><span class="lbl">Bestand</span><b>${p.qty?fmtQ(p.qty,qDec(m.market,p.buy)):'unbekannt'}</b></div><div><span class="lbl">Ergebnis nach Gebühren</span><b class="${a.pnl>=0?'up':'down'}">${pct(a.pnl)}${a.eur!=null?` · ${a.eur>=0?'+':''}${a.eur.toFixed(2)} ${cy(p.m)}`:''}</b></div><div><span class="lbl">Aktiver Stop</span><b class="down">${fmtP(a.eff)}</b></div><div><span class="lbl">Ziel</span><b class="up">${fmtP(p.tp)}</b></div></div>
     <p style="margin:0">${a.why}.</p>
     ${dr&&dr.mode!=='buy'||dr&&dr.mode==='buy'&&dr.open?tradeForm(m,p,dr):`<div class="posform"><button type="button" id="posSell" class="primary">Verkaufen</button><button type="button" id="posMore">Nachkaufen</button></div>`}
     ${!p.qty?`<div class="posform"><label>Gekaufte Menge nachtragen<input id="fixQty" type="number" inputmode="decimal" step="any" min="0" placeholder="z. B. 1326"></label><button type="button" id="fixOk">Menge speichern</button></div>`:''}
@@ -715,12 +721,12 @@ function bindPos(m){
   $('#posMore')?.addEventListener('click',()=>{draft[m.market]={mode:'buy',open:true,amt:null,custom:null,price:'',qty:'',qtyManual:false};refreshPos(m)});
   $('#trNo')?.addEventListener('click',()=>{delete draft[m.market];refreshPos(m)});
   $('#fixOk')?.addEventListener('click',()=>{const q=parseFloat($('#fixQty').value),x=p();if(!(q>0)){$('#fixQty').focus();return}
-    x.qty=q;x.cost=x.buy*q*(1+FEE);store('bvr-pf',pf);renderPf();refreshPos(m);toBot(`kauf ${m.base} ${numStr(x.buy)} ${numStr(q)}`).then(botNote)});
+    x.qty=q;x.cost=x.buy*q*(1+feeOf(m.market));store('bvr-pf',pf);renderPf();refreshPos(m);toBot(`kauf ${m.market} ${numStr(x.buy)} ${numStr(q)}`).then(botNote)});
   $('#trOk')?.addEventListener('click',()=>{const d=dr(),c=tradeCalc(m,p(),d);
     if(d.mode==='sell'){const x=p();if(!x)return;const q=x.qty?c.q:null;if(x.qty&&!(q>0)){$('#trQty').focus();return}
-      closePos(m.market,c.price,q);delete draft[m.market];toBot(`verkauf ${m.base} ${numStr(c.price)}${q?' '+numStr(q):''}`).then(botNote)}
+      closePos(m.market,c.price,q);delete draft[m.market];toBot(`verkauf ${m.market} ${numStr(c.price)}${q?' '+numStr(q):''}`).then(botNote)}
     else{if(!(c.q>0)){($('#trAmt')||$('#trQty')).focus();return}
-      addPos(m.market,c.price,c.q);delete draft[m.market];toBot(`kauf ${m.base} ${numStr(c.price)} ${numStr(c.q)}`).then(botNote)}
+      addPos(m.market,c.price,c.q);delete draft[m.market];toBot(`kauf ${m.market} ${numStr(c.price)} ${numStr(c.q)}`).then(botNote)}
     pfUpdate();renderPf();render();renderDetail()});
 }
 
@@ -730,10 +736,10 @@ function saveN(){store('bvr-nset',nset)}
 function checkAlerts(){
   const ev=[],now=Date.now();
   markets.forEach(m=>{const r=results[m.market];if(!r||!eligible(m))return;const key='b:'+m.market+':'+TF,on=r.sig[0]>=nset.lvl,prev=nstate[key];
-    if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,kind:'buy',m:m.market});
+    if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} ${cy(m.market)} · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} ${cy(m.market)} · Ziel ${fmtP(r.t1)} ${cy(m.market)}`,kind:'buy',m:m.market});
     nstate[key]={s:on,t:now}});
   pf.forEach(p=>{const a=advice(p),key='s:'+p.m,prev=nstate[key];
-    if(nset.sell&&!['hold','na'].includes(a.act)&&!(prev&&prev.s===a.act))ev.push({title:`${a.label}: ${p.m.replace('-EUR','')}`,body:`${a.why}. ${pct(a.pnl)} seit Kauf, Kurs ${fmtP(a.last)} €`,kind:'sell',m:p.m});
+    if(nset.sell&&!['hold','na'].includes(a.act)&&!(prev&&prev.s===a.act))ev.push({title:`${a.label}: ${p.m.split('-')[0]}`,body:`${a.why}. ${pct(a.pnl)} seit Kauf, Kurs ${fmtP(a.last)} ${cy(p.m)}`,kind:'sell',m:p.m});
     nstate[key]={s:a.act,t:now}});
   store('bvr-nstate',nstate);
   if(!ev.length)return;
@@ -795,14 +801,15 @@ function renderPaper(){
   $('#paperTime').textContent=`seit ${f(start)} · Stand ${f(paper.stand)}`;
   // Deine Trades seit Start des Papierhandels (nur Einträge mit Menge)
   const cl=closed.filter(c=>c.t>=start&&c.eur!=null),op=pf.filter(p=>p.t>=start&&p.qty&&curOf(p.m)!=null);
-  const myReal=cl.reduce((s,c)=>s+c.eur,0),myOpen=op.reduce((s,p)=>s+p.qty*curOf(p.m)*(1-FEE)-(p.cost??p.buy*p.qty*(1+FEE)),0);
-  const myInv=cl.reduce((s,c)=>s+c.buy*c.qty*(1+FEE),0)+op.reduce((s,p)=>s+(p.cost??p.buy*p.qty*(1+FEE)),0);
-  const col=(title,res,pctv,sub)=>`<div class="pcol"><span class="lbl">${title}</span><b class="${res>=0?'up':'down'}">${res>=0?'+':''}${res.toFixed(2)} €</b><span class="num ${res>=0?'up':'down'}">${pct(pctv)}</span><span class="muted">${sub}</span></div>`;
-  const V=paper.varianten,vs=['limit','markt'].map(k=>{const v=V[k];return col('Bot · '+v.name,v.ergebnis,v.ergebnis_pct,`${v.trades} Verkäufe, ${v.gewinner} im Gewinn · Gebühren ${v.gebuehren.toFixed(2)} € · ${v.offen.length} offen${v.orders.length?`, ${v.orders.length} Order${v.orders.length>1?'s':''} offen`:''}${v.storniert?` · ${v.storniert} Limit-Orders verfallen`:''}`)});
+  const U=(v,mk)=>isEur(mk)?v*EURUSD:v;
+  const myReal=cl.reduce((s,c)=>s+U(c.eur,c.m),0),myOpen=op.reduce((s,p)=>s+U(p.qty*curOf(p.m)*(1-feeOf(p.m))-(p.cost??p.buy*p.qty*(1+feeOf(p.m))),p.m),0);
+  const myInv=cl.reduce((s,c)=>s+U(c.buy*c.qty*(1+feeOf(c.m)),c.m),0)+op.reduce((s,p)=>s+U(p.cost??p.buy*p.qty*(1+feeOf(p.m)),p.m),0);
+  const col=(title,res,pctv,sub)=>`<div class="pcol"><span class="lbl">${title}</span><b class="${res>=0?'up':'down'}">${res>=0?'+':''}${res.toFixed(2)} $</b><span class="num ${res>=0?'up':'down'}">${pct(pctv)}</span><span class="muted">${sub}</span></div>`;
+  const V=paper.varianten,vs=['limit','markt'].map(k=>{const v=V[k];return col('Bot · '+v.name,v.ergebnis,v.ergebnis_pct,`${v.trades} Verkäufe, ${v.gewinner} im Gewinn · Gebühren ${v.gebuehren.toFixed(2)} $ · ${v.offen.length} offen${v.orders.length?`, ${v.orders.length} Order${v.orders.length>1?'s':''} offen`:''}${v.storniert?` · ${v.storniert} Limit-Orders verfallen`:''}`)});
   const me=col('Du · manuell',myReal+myOpen,myInv?(myReal+myOpen)/myInv*100:0,`${cl.length} Verkäufe, ${cl.filter(c=>c.eur>0).length} im Gewinn · ${op.length} offen · nur Einträge mit Menge`);
   const pts=paper.verlauf||[],vals=pts.flatMap(p=>[p.limit,p.markt]),lo=Math.min(...vals,paper.kapital),hi=Math.max(...vals,paper.kapital);
-  const svg=pts.length>1?`<svg viewBox="0 0 300 60" preserveAspectRatio="none" class="pspark" aria-label="Verlauf Papierhandel">${(()=>{const y=(60-2-(paper.kapital-lo)/((hi-lo)||1)*56).toFixed(1);return `<line x1="0" x2="300" y1="${y}" y2="${y}" stroke="var(--line)" stroke-dasharray="3 3"/>`})()}${spark(pts,'limit',lo,hi,300,60,'--accent')}${spark(pts,'markt',lo,hi,300,60,'--warn')}</svg><div class="lbl" style="display:flex;gap:14px"><span style="color:var(--accent)">— Limit</span><span style="color:var(--warn)">— Markt</span><span>┄ Start ${paper.kapital} €</span></div>`:'';
-  const openRows=['limit','markt'].flatMap(k=>V[k].offen.map(o=>`<div class="jrow" style="grid-template-columns:60px 1fr 1fr 80px"><span class="tag open">${k==='limit'?'Limit':'Markt'}</span><b>${o.markt.replace('-EUR','')}</b><span class="num muted">${fmtP(o.kauf)} → ${fmtP(o.kurs)}</span><span class="num ${o.ergebnis>=0?'up':'down'}" style="text-align:right">${o.ergebnis>=0?'+':''}${o.ergebnis.toFixed(2)} €</span></div>`)).join('');
+  const svg=pts.length>1?`<svg viewBox="0 0 300 60" preserveAspectRatio="none" class="pspark" aria-label="Verlauf Papierhandel">${(()=>{const y=(60-2-(paper.kapital-lo)/((hi-lo)||1)*56).toFixed(1);return `<line x1="0" x2="300" y1="${y}" y2="${y}" stroke="var(--line)" stroke-dasharray="3 3"/>`})()}${spark(pts,'limit',lo,hi,300,60,'--accent')}${spark(pts,'markt',lo,hi,300,60,'--warn')}</svg><div class="lbl" style="display:flex;gap:14px"><span style="color:var(--accent)">— Limit</span><span style="color:var(--warn)">— Markt</span><span>┄ Start ${paper.kapital} $</span></div>`:'';
+  const openRows=['limit','markt'].flatMap(k=>V[k].offen.map(o=>`<div class="jrow" style="grid-template-columns:60px 1fr 1fr 80px"><span class="tag open">${k==='limit'?'Limit':'Markt'}</span><b>${o.markt.split('-')[0]}</b><span class="num muted">${fmtP(o.kauf)} → ${fmtP(o.kurs)}</span><span class="num ${o.ergebnis>=0?'up':'down'}" style="text-align:right">${o.ergebnis>=0?'+':''}${o.ergebnis.toFixed(2)} $</span></div>`)).join('');
   el.innerHTML=`<div class="pcols">${vs.join('')}${me}</div>${svg}
     ${openRows?`<details><summary class="muted">Offene Positionen im Papierhandel</summary><div class="jrows">${openRows}</div></details>`:''}`;
 }
@@ -851,7 +858,7 @@ function renderMood(){
   const all=Object.values(results),b=all.filter(r=>r.sig[0]>0).length,s=all.filter(r=>r.sig[0]<0).length;
   $('#breadth').innerHTML=`<span class="up">${b}</span> / <span class="down">${s}</span>`;
   $('#breadthTxt').textContent=b>s*1.5?'Viele Long-Setups mit Vorteil':s>b*1.5?'Wenige Setups mit Vorteil, Vorsicht':'Gemischter Markt, selektiv handeln';
-  const btc=results['BTC-EUR'];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(['aufwärts','erholt'].includes(btc.trend)?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.cal.win*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
+  const btc=results['BTC'+QS];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(['aufwärts','erholt'].includes(btc.trend)?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.cal.win*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
@@ -870,12 +877,12 @@ function renderDetail(){
   const d=$('#detail'),m=markets.find(x=>x.market===selected),r=results[selected];if(!m||!r){d.hidden=true;return}
   d.hidden=false;const ci=cgInfo[m.base]||{},cs=model.coin[m.market];
   const held=pf.find(x=>x.m===m.market);
-  const plan=held?`Du hältst ${m.base}. Empfehlung: ${advice(held).label}. ${advice(held).why}.`:r.sig[0]>0?`Long-Setup: Einstieg um ${fmtP(m.last)} €, Stop-Loss ${fmtP(r.stop)} €, Ziel 1 bei ${fmtP(r.t1)} €, Ziel 2 bei ${fmtP(r.t2)} €. Historisch erreichten vergleichbare Signale in ${(r.cal.win*100).toFixed(0)} % der Fälle das Ziel, im Schnitt ${fmtR(r.cal.r)} pro Trade.`
-    :r.sig[0]<0?`Kein Einstieg. Vergleichbare Situationen brachten historisch im Schnitt ${fmtR(r.cal.r)}. Bestehende Positionen absichern oder reduzieren. Neu prüfen bei Ausbruch über ${fmtP(r.res)} € oder Stabilisierung an ${fmtP(r.sup)} €.`
-    :`Abwarten. Vergleichbare Situationen brachten historisch ${fmtR(r.cal.r)}, also kein klarer Vorteil. Interessant bei Ausbruch über ${fmtP(r.res)} € mit Volumen oder an der Unterstützung ${fmtP(r.sup)} €.`;
+  const C=cy(m.market),plan=held?`Du hältst ${m.base}. Empfehlung: ${advice(held).label}. ${advice(held).why}.`:r.sig[0]>0?`Long-Setup: Einstieg um ${fmtP(m.last)} ${C}, Stop-Loss ${fmtP(r.stop)} ${C}, Ziel 1 bei ${fmtP(r.t1)} ${C}, Ziel 2 bei ${fmtP(r.t2)} ${C}. Historisch erreichten vergleichbare Signale in ${(r.cal.win*100).toFixed(0)} % der Fälle das Ziel, im Schnitt ${fmtR(r.cal.r)} pro Trade.`
+    :r.sig[0]<0?`Kein Einstieg. Vergleichbare Situationen brachten historisch im Schnitt ${fmtR(r.cal.r)}. Bestehende Positionen absichern oder reduzieren. Neu prüfen bei Ausbruch über ${fmtP(r.res)} ${C} oder Stabilisierung an ${fmtP(r.sup)} ${C}.`
+    :`Abwarten. Vergleichbare Situationen brachten historisch ${fmtR(r.cal.r)}, also kein klarer Vorteil. Interessant bei Ausbruch über ${fmtP(r.res)} ${C} mit Volumen oder an der Unterstützung ${fmtP(r.sup)} ${C}.`;
   d.innerHTML=`<div class="detail-head"><div><div class="lbl">${m.market} · ${TF}${ci.rank?' · Rang #'+ci.rank:''}</div><h2>${ci.name||m.base}</h2></div>
      <div style="display:flex;gap:8px;align-items:center"><span class="pill ${pillCls(r.sig[0])}">${r.sig[1]}</span><button class="close-d" id="closeD" aria-label="Schliessen">✕</button></div></div>
-   <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap"><span class="big">${fmtP(m.last)} €</span><span class="num ${m.chg>=0?'up':'down'}">${pct(m.chg)} 24h</span>${ci.ch7!=null?`<span class="num muted">${pct(ci.ch7)} 7T</span>`:''}</div>
+   <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap"><span class="big">${fmtP(m.last)} ${C}</span><span class="num ${m.chg>=0?'up':'down'}">${pct(m.chg)} 24h</span>${ci.ch7!=null?`<span class="num muted">${pct(ci.ch7)} 7T</span>`:''}</div>
    <div class="posbox" id="posBox">${posHtml(m,r)}</div>
    <div class="chartbox"><canvas id="cv" height="300" aria-label="Kerzenchart mit EMA und Bollinger"></canvas><canvas id="cr" height="70" aria-label="RSI"></canvas></div>
    <div class="lbl" style="display:flex;gap:14px;flex-wrap:wrap"><span style="color:var(--warn)">— EMA 20</span><span style="color:var(--accent)">— EMA 50</span><span>┄ Bollinger</span><span>RSI 14 unten</span></div>

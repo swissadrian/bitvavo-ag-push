@@ -1,6 +1,6 @@
 # Bitvavo Signal-Bot
 
-Prüft alle 5 Minuten alle EUR-Märkte auf Bitvavo mit mehr als 50'000 € Volumen am letzten Tag **und** mehr als 1 Mio. € in den letzten 30 Tagen. So bleiben kleine Coins mit wenig Handel draussen. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
+Prüft alle 5 Minuten die **USDC-Märkte** auf Bitvavo mit mehr als 50'000 $ Volumen am letzten Tag **und** mehr als 1 Mio. $ in den letzten 30 Tagen (Stand November 2026: ETH, XRP, BTC, SOL, ADA). Gehandelt wird gegen USDC, weil die Gebühr dort 0,05 % statt 0,25 % beträgt. Positionen, die noch in EUR-Märkten gekauft wurden, bleiben in EUR und werden weiter überwacht, bis sie verkauft sind. So bleiben kleine Coins mit wenig Handel draussen. Er trainiert das gleiche Lernmodell wie die Radar-App und schickt per ntfy eine Push-Nachricht aufs Handy:
 
 - bei jedem **neuen** Kauf-Signal (Standard: nur «Starker Kauf»)
 - bei Verkaufsempfehlungen für deine Coins: Stop erreicht, Ziel erreicht, Modell negativ, stark überkauft
@@ -21,7 +21,7 @@ Die Bitvavo-Gebühr (0,25 % pro Kauf und Verkauf) ist im Lernmodell eingerechnet
 
 Der Bot liest deine Käufe über den ntfy-Kanal `<dein Kanal>-cmd`. Zwei Wege:
 
-- **Radar-App:** Im Coin unter «Meine Position» einen Betrag wählen (50, 100, 150, 200 € oder ein eigener Betrag). Die App berechnet die Stückzahl inklusive 0,25 % Gebühr und rundet auf die bei Bitvavo erlaubten Nachkommastellen. Beim Kauf ist der Betrag das, was du insgesamt zahlst. Beim Verkauf ist er das, was du nach der Gebühr erhältst. Möglich sind auch «Alles», Nachkaufen (mit Durchschnittspreis) und Teilverkäufe. Die App schickt alles automatisch an den Bot, sofern dort derselbe ntfy-Kanal eingetragen ist.
+- **Radar-App:** Im Coin unter «Meine Position» einen Betrag wählen (50, 100, 150, 200 $ oder ein eigener Betrag). Die App berechnet die Stückzahl inklusive Gebühr (0,05 % in USDC-Märkten, 0,25 % bei alten EUR-Positionen) und rundet auf die bei Bitvavo erlaubten Nachkommastellen. Beim Kauf ist der Betrag das, was du insgesamt zahlst. Beim Verkauf ist er das, was du nach der Gebühr erhältst. Möglich sind auch «Alles», Nachkaufen (mit Durchschnittspreis) und Teilverkäufe. Die App schickt alles automatisch an den Bot, sofern dort derselbe ntfy-Kanal eingetragen ist.
 - **ntfy-App:** Den Kanal `<dein Kanal>-cmd` abonnieren und eine Nachricht senden:
   - `kauf BTC 61500 0.02` (Coin, Kaufpreis, Menge optional). Bei bestehender Position mit Menge gilt das als Nachkauf.
   - `verkauf BTC 63000` verkauft alles, `verkauf BTC 63000 0.01` nur einen Teil.
@@ -33,7 +33,7 @@ Die Positionen speichert der Bot **verschlüsselt** im Branch `logs` (`zustand.e
 
 ## Papierhandel (Probelauf für den Handel über die API)
 
-Der Bot handelt simuliert und ohne echtes Geld so, wie er es über die Bitvavo-API täte. Bei jedem neuen «Starker Kauf» kauft er für 100 € (Startkapital 1'000 €, höchstens 10 Positionen gleichzeitig). Verkauft wird nach Plan: Stop-Loss, nachziehender Stop, Ziel, Verkaufssignal oder spätestens nach der Haltedauer. Geprüft wird Minute für Minute anhand der 1-Minuten-Kerzen.
+Der Bot handelt simuliert und ohne echtes Geld so, wie er es über die Bitvavo-API täte. Seit dem 4.11.2026 in USDC: Bei jedem neuen «Starker Kauf» kauft er für 100 $ (Startkapital 1'000 $, höchstens 10 Positionen gleichzeitig), Gebühr 0,05 %. Verkauft wird nach Plan: Stop-Loss, nachziehender Stop, Ziel, Verkaufssignal oder spätestens nach der Haltedauer. Geprüft wird Minute für Minute anhand der 1-Minuten-Kerzen.
 
 Zwei Varianten laufen parallel:
 - **Limit-Orders:** Kauf zum Geldkurs mit 0,15 % Gebühr. Die Order verfällt nach 15 Minuten, wenn der Kurs nicht hinkommt. Verkauf am Ziel ebenfalls per Limit.
@@ -73,7 +73,7 @@ Einmal pro Woche vergleicht der Bot beide Varianten auf denselben unbekannten Te
 
 Die Kurse im Logbuch sind eine Kopie dessen, was Bitvavo jederzeit wieder liefert. Für die Vorhersage bringen sie deshalb nichts Neues. Zusätzlich sammelt der Bot bei jedem Lauf Daten, die man später **nicht** mehr abrufen kann:
 
-- **Orderbuch** je Coin: Spread, Markttiefe ±1 % und ±2 % in Euro (Kauf- und Verkaufsseite), Ungleichgewicht zwischen Kauf- und Verkaufsaufträgen.
+- **Orderbuch** je Coin: Spread, Markttiefe ±1 % und ±2 % in der Handelswährung (Kauf- und Verkaufsseite), Ungleichgewicht zwischen Kauf- und Verkaufsaufträgen.
 - **Marktstimmung:** Fear & Greed, Gesamt-Marktkapitalisierung und ihre 24h-Veränderung, BTC- und ETH-Dominanz, die Trending-Liste von CoinGecko.
 
 Jede Woche prüft der Bot jede Merkmalgruppe einzeln: einmal mit, einmal ohne, auf denselben unbekannten Testdaten nach Gebühren. Eine Gruppe wird nur genutzt, wenn sie die Vorhersage spürbar verbessert. Fear & Greed gibt es rückwirkend seit 2018, das wird sofort geprüft. Orderbuch und CoinGecko werden ab 90 gesammelten Tagen geprüft. Bis dahin steht in `analyse/merkmale.csv` «wartet (x/90 Tage)».
@@ -124,3 +124,9 @@ Verkaufsmeldungen und deine Positionen werden nicht im Klartext geloggt, weil da
 - Bei öffentlichen Repositories pausiert GitHub geplante Läufe nach 60 Tagen ohne Commit. Dann einfach eine kleine Änderung committen, zum Beispiel in dieser README.
 - Fällt der Datenabruf aus, kommt eine Fehlermeldung und eine Entwarnung, sobald es wieder läuft.
 - Das ist keine Anlageberatung. Setze immer einen echten Stop-Loss bei Bitvavo.
+
+## USDC-Test (Top 5 mit Trendfilter 50 Tage)
+
+Einmalig gerechnet (`analyse/usdctest.json`): nur Coins, die gegen USDC mit mehr als 50'000 $ am Tag gehandelt werden, Kosten 0,05 % plus halber Spread aus dem USDC-Orderbuch, Kurse in US-Dollar mit dem EZB-Kurs EUR/USD, Umtausch EUR→USDC 0,10 % am Anfang und Ende, Ergebnis zusätzlich in Franken (EZB-Kurs EUR/CHF). Zur Kontrolle der Empfindlichkeit: 40, 50 und 60 Tage und jeder Wochentag als Umschichttag.
+
+Befehle an den Bot (ntfy-Kanal mit `-cmd`): `kauf BTC-USDC 71500 0.02`, `verkauf BTC-USDC 73000`, `verkauf BTC-USDC 73000 0.01`, `liste`. Ohne `-USDC` gilt der EUR-Markt (alte Positionen).
