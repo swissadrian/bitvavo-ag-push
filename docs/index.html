@@ -594,7 +594,7 @@ function saveN(){store('bvr-nset',nset)}
 function checkAlerts(){
   const ev=[],now=Date.now();
   markets.forEach(m=>{const r=results[m.market];if(!r||!eligible(m))return;const key='b:'+m.market+':'+TF,on=r.sig[0]>=nset.lvl,prev=nstate[key];
-    if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.p*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,kind:'buy',m:m.market});
+    if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} € · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} € · Ziel ${fmtP(r.t1)} €`,kind:'buy',m:m.market});
     nstate[key]={s:on,t:now}});
   pf.forEach(p=>{const a=advice(p),key='s:'+p.m,prev=nstate[key];
     if(nset.sell&&!['hold','na'].includes(a.act)&&!(prev&&prev.s===a.act))ev.push({title:`${a.label}: ${p.m.replace('-EUR','')}`,body:`${a.why}. ${pct(a.pnl)} seit Kauf, Kurs ${fmtP(a.last)} €`,kind:'sell',m:p.m});
@@ -667,7 +667,7 @@ function render(){
     <div class="num">${fmtP(m.last)}<div class="${m.chg>=0?'up':'down'} num" style="font-size:11px;display:${narrow?'block':'none'}">${pct(m.chg)}</div></div>
     <div class="num hide-s ${m.chg>=0?'up':'down'}">${pct(m.chg)}</div>
     <div class="num vol">${fmtV(m.vol)}</div>
-    <div class="num hide-s">${(r.p*100).toFixed(0)}%</div>
+    <div class="num hide-s">${(r.cal.win*100).toFixed(0)}%</div>
     <div>${(()=>{const p=pf.find(x=>x.m===m.market);if(!p)return `<span class="pill ${pillCls(r.sig[0])}">${r.sig[1]}</span>${scoreBar(r.score)}`;const a=advice(p);return `<span class="pill ${a.cls}">${a.label}</span><div class="muted num" style="font-size:11px;margin-top:3px">Besitz ${pct(a.pnl)}</div>`})()}</div></div>`}).join('');
 }
 function renderTrending(){
@@ -685,13 +685,13 @@ function renderCands(){
   el.innerHTML=top.map((m,i)=>{const r=results[m.market],why=r.reasons.find(x=>x[0]>0);return `<div class="cand" tabindex="0" data-m="${m.market}">
     <span class="num muted">${i+1}</span>
     <div style="min-width:0"><b class="sym">${m.base}</b> <span class="num ${m.chg>=0?'up':'down'}" style="font-size:12px">${pct(m.chg)} <span class="muted">24h</span></span><div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${why?why[1]:'Kein positiver Faktor'}</div></div>
-    <div style="text-align:right"><span class="pill ${r.sig[0]>0?pillCls(r.sig[0]):'watch'}">${r.sig[0]>0?r.sig[1]:'Beobachten'}</span><div class="num muted" style="font-size:11px;margin-top:3px">${(r.p*100).toFixed(0)}% · ${fmtR(r.ev)}</div></div></div>`}).join('');
+    <div style="text-align:right"><span class="pill ${r.sig[0]>0?pillCls(r.sig[0]):'watch'}">${r.sig[0]>0?r.sig[1]:'Beobachten'}</span><div class="num muted" style="font-size:11px;margin-top:3px">${(r.cal.win*100).toFixed(0)}% · ${fmtR(r.ev)}</div></div></div>`}).join('');
 }
 function renderMood(){
   const all=Object.values(results),b=all.filter(r=>r.sig[0]>0).length,s=all.filter(r=>r.sig[0]<0).length;
   $('#breadth').innerHTML=`<span class="up">${b}</span> / <span class="down">${s}</span>`;
   $('#breadthTxt').textContent=b>s*1.5?'Viele Long-Setups mit Vorteil':s>b*1.5?'Wenige Setups mit Vorteil, Vorsicht':'Gemischter Markt, selektiv handeln';
-  const btc=results['BTC-EUR'];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(['aufwärts','erholt'].includes(btc.trend)?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.p*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
+  const btc=results['BTC-EUR'];if(btc){$('#btc').textContent=btc.trend;$('#btc').className='v '+(['aufwärts','erholt'].includes(btc.trend)?'up':'down');$('#btcTxt').textContent='Treffer-W. '+(btc.cal.win*100).toFixed(0)+'% · RSI '+btc.rsi.toFixed(0)}
 }
 function renderModel(){
   if(!model)return;const m=model,f=d=>d.toLocaleDateString('de-CH',{day:'2-digit',month:'2-digit'});
@@ -719,7 +719,7 @@ function renderDetail(){
    <div class="posbox" id="posBox">${posHtml(m,r)}<span class="muted" id="botNote" style="font-size:12px"></span></div>
    <div class="chartbox"><canvas id="cv" height="300" aria-label="Kerzenchart mit EMA und Bollinger"></canvas><canvas id="cr" height="70" aria-label="RSI"></canvas></div>
    <div class="lbl" style="display:flex;gap:14px;flex-wrap:wrap"><span style="color:var(--warn)">— EMA 20</span><span style="color:var(--accent)">— EMA 50</span><span>┄ Bollinger</span><span>RSI 14 unten</span></div>
-   <div class="kv"><div><span class="lbl">Treffer-Wahrsch.</span><b>${(r.p*100).toFixed(0)}%</b></div><div><span class="lbl">Erwartung / Trade</span><b class="${r.ev>0?'up':'down'}">${fmtR(r.ev)}</b></div><div><span class="lbl">Signal-Rang</span><b>Top ${100-r.cal.q*10}%</b></div>${cs?`<div><span class="lbl">Bei ${m.base} zuletzt</span><b>${cs.w}/${cs.n} Ziel</b></div>`:''}</div>
+   <div class="kv"><div><span class="lbl">Treffer-Wahrsch.</span><b>${(r.cal.win*100).toFixed(0)}%</b></div><div><span class="lbl">Erwartung / Trade</span><b class="${r.ev>0?'up':'down'}">${fmtR(r.ev)}</b></div><div><span class="lbl">Signal-Rang</span><b>Top ${100-r.cal.q*10}%</b></div>${cs?`<div><span class="lbl">Bei ${m.base} zuletzt</span><b>${cs.w}/${cs.n} Ziel</b></div>`:''}</div>
    <div><span class="lbl">Handelsplan</span><p style="margin:4px 0 0;max-width:65ch">${plan}</p></div>
    <div class="levels"><div><span class="lbl">Stop-Loss</span><b class="down">${fmtP(r.stop)}</b></div><div><span class="lbl">Ziel 1</span><b class="up">${fmtP(r.t1)}</b></div><div><span class="lbl">Ziel 2</span><b class="up">${fmtP(r.t2)}</b></div><div><span class="lbl">Chance/Risiko</span><b>${GEO.tp} : 1</b></div></div>
    <div class="kv"><div><span class="lbl">Unterstützung</span><b>${fmtP(r.sup)}</b></div><div><span class="lbl">Widerstand</span><b>${fmtP(r.res)}</b></div><div><span class="lbl">ATR (Volatilität)</span><b>${r.atrPct.toFixed(2)}%</b></div><div><span class="lbl">Volumen vs. Schnitt</span><b>${r.volR.toFixed(1)}×</b></div><div><span class="lbl">RSI</span><b>${r.rsi.toFixed(0)}</b></div>${ci.ath!=null?`<div><span class="lbl">Abstand ATH</span><b>${ci.ath.toFixed(0)}%</b></div>`:''}</div>
