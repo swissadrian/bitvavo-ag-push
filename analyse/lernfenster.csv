@@ -1,0 +1,3 @@
+datum_utc,lerndaten_monate,trainings_beispiele,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,gewaehlt
+2026-11-04 05:00,12,191575,0.197,0.236,0.074,ja
+2026-11-04 05:00,24,401911,0.208,0.230,0.078,nein

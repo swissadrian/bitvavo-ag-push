@@ -1,0 +1,17 @@
+datum_utc,variante,anzahl_merkmale,erwartung_top10_r,trefferquote_top10,erwartung_top20_r,gewaehlt
+2026-11-03 21:27,bisher,16,-0.026,0.196,-0.044,ja
+2026-11-03 21:27,erweitert,30,-0.111,0.172,-0.137,nein
+2026-11-04 04:01,bisher,16,0.282,0.261,0.157,ja
+2026-11-04 04:01,erweitert,30,0.021,0.194,-0.016,nein
+2026-11-04 05:00,ohne erweitert,16,0.224,0.246,0.078,ja
+2026-11-04 05:00,mit erweitert,30,0.017,0.190,-0.034,nein
+2026-11-04 05:00,ohne Fear & Greed,16,0.224,0.246,0.078,nein
+2026-11-04 05:00,mit Fear & Greed,19,0.429,0.287,0.319,ja
+2026-11-04 05:00,mit Orderbuch,,,,,wartet (0/90 Tage)
+2026-11-04 05:00,mit CoinGecko,,,,,wartet (0/90 Tage)
+2026-11-04 18:58,ohne erweitert,19,0.556,0.197,0.362,ja
+2026-11-04 18:58,mit erweitert,33,0.511,0.184,0.377,nein
+2026-11-04 18:58,ohne Fear & Greed,16,0.402,0.161,0.275,nein
+2026-11-04 18:58,mit Fear & Greed,19,0.556,0.197,0.362,ja
+2026-11-04 18:58,mit Orderbuch,,,,,wartet (0/90 Tage)
+2026-11-04 18:58,mit CoinGecko,,,,,wartet (0/90 Tage)
