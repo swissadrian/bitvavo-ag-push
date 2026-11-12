@@ -31,10 +31,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          POSITIONS: ${{ secrets.POSITIONS }}
           BITVAVO_KEY: ${{ secrets.BITVAVO_KEY }}        # nur «Anzeigen» und «Handeln», ohne Auszahlung
           BITVAVO_SECRET: ${{ secrets.BITVAVO_SECRET }}
           TF: ${{ vars.TF || '1h' }}
           MIN_LEVEL: ${{ vars.MIN_LEVEL || '2' }}
           LOG_DIR: logdata
         run: ./run-loop.sh
+

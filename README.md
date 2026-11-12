@@ -5,7 +5,7 @@ Prüft alle 5 Minuten die **USDC-Märkte** auf Bitvavo mit mehr als 50'000 $ Vol
 - bei jedem **neuen** Kauf-Signal (Standard: nur «Starker Kauf»)
 - bei Verkaufsempfehlungen für deine Coins: Stop erreicht, Ziel erreicht, Modell negativ, stark überkauft
 
-Die Bitvavo-Gebühr (0,25 % pro Kauf und Verkauf) ist im Lernmodell eingerechnet. Jedes Signal wird nur einmal gemeldet. Ändert es sich, kommt eine neue Meldung.
+Die Bitvavo-Gebühr (0,05 % pro Kauf und Verkauf in USDC-Märkten) ist im Lernmodell eingerechnet. Jedes Signal wird nur einmal gemeldet. Ändert es sich, kommt eine neue Meldung.
 
 ## Einrichten
 

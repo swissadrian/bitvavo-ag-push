@@ -236,21 +236,13 @@ footer{font-size:12px;color:var(--muted);max-width:75ch}
       <div id="pfList"></div>
       <span class="muted" style="font-size:12px" id="pfClosed"></span>
     </section>
-    <section class="panel" aria-label="Benachrichtigungen">
-      <h2>Benachrichtigungen</h2>
+    <section class="panel" aria-label="Verbindung zum Bot">
+      <h2>Verbindung zum Bot</h2>
       <div class="nrow">
-        <label class="chk"><input type="checkbox" id="nBuy"> Kauf-Signale</label>
-        <select id="nLvl" aria-label="Ab welchem Signal"><option value="2">nur Starker Kauf</option><option value="1">ab Kauf</option></select>
-        <label class="chk"><input type="checkbox" id="nSell"> Verkaufssignale meiner Coins</label>
+        <label>ntfy-Kanal<input type="text" id="nTopic" placeholder="dein-geheimer-kanal" autocomplete="off" spellcheck="false"></label>
+        <button id="nCopy">Kopieren</button><button id="nTest" class="primary">Test senden</button>
       </div>
-      <div class="nrow"><button id="nBrowser">Browser-Benachrichtigungen einschalten</button><span class="muted" id="nBrState" style="font-size:12px"></span></div>
-      <div class="nrow">
-        <label>ntfy-Kanal (Push aufs Handy)<input type="text" id="nTopic" placeholder="dein-geheimer-kanal" autocomplete="off" spellcheck="false"></label>
-        <button id="nGen">Kanal erzeugen</button><button id="nCopy">Kopieren</button><button id="nTest" class="primary">Test senden</button>
-      </div>
-      <p class="hint">Für Push aufs Handy: Gratis-App «ntfy» installieren, «Kanal erzeugen» tippen, den Namen kopieren und in ntfy abonnieren. Den Namen nicht teilen, sonst sieht jemand anderes deine Meldungen. Derselbe Kanal verbindet die App mit dem GitHub-Bot: Käufe und Verkäufe, die du hier einträgst, übernimmt der Bot automatisch.</p>
-      <div class="nrow"><label class="chk"><input type="checkbox" id="nWake"> Bildschirm wach halten</label><span class="muted" id="nWakeTxt" style="font-size:12px">Signale werden nur geprüft, solange die App offen ist.</span></div>
-      <div><span class="lbl">Zuletzt gesendet</span><div class="jrows" id="nLog" style="margin-top:4px;max-height:200px"></div></div>
+      <p class="hint">Trage hier denselben Kanal ein wie im GitHub-Secret <code>NTFY_TOPIC</code>. Darüber laufen die Push-Meldungen des Bots, deine Käufe und Verkäufe aus «Mein Portfolio», die Knöpfe der Automatik, und damit wird der Bitvavo-Kontostand auf diesem Gerät entschlüsselt. Den Namen nicht teilen.</p>
     </section>
   </div>
 
@@ -751,62 +743,21 @@ function bindPos(m){
 }
 
 /* ---------- Benachrichtigungen ---------- */
-let nset={buy:true,lvl:2,sell:true,browser:false,topic:'',...(store('bvr-nset')||{})}, nstate=store('bvr-nstate')||{}, nlog=store('bvr-nlog')||[], swReg=null, wake=null;
+let nset={topic:'',...(store('bvr-nset')||{})}, nstate=store('bvr-nstate')||{}, nlog=store('bvr-nlog')||[], swReg=null, wake=null;
 function saveN(){store('bvr-nset',nset)}
-function checkAlerts(){
-  const ev=[],now=Date.now();
-  markets.forEach(m=>{const r=results[m.market];if(!r||!eligible(m))return;const key='b:'+m.market+':'+TF,on=r.sig[0]>=nset.lvl,prev=nstate[key];
-    if(nset.buy&&on&&!(prev&&prev.s))ev.push({title:`${r.sig[1]}: ${m.base} (${TF})`,body:`Kurs ${fmtP(m.last)} ${cy(m.market)} · Treffer-W. ${(r.cal.win*100).toFixed(0)}% · Stop ${fmtP(r.stop)} ${cy(m.market)} · Ziel ${fmtP(r.t1)} ${cy(m.market)}`,kind:'buy',m:m.market});
-    nstate[key]={s:on,t:now}});
-  pf.forEach(p=>{const a=advice(p),key='s:'+p.m,prev=nstate[key];
-    if(nset.sell&&!['hold','na'].includes(a.act)&&!(prev&&prev.s===a.act))ev.push({title:`${a.label}: ${p.m.split('-')[0]}`,body:`${a.why}. ${pct(a.pnl)} seit Kauf, Kurs ${fmtP(a.last)} ${cy(p.m)}`,kind:'sell',m:p.m});
-    nstate[key]={s:a.act,t:now}});
-  store('bvr-nstate',nstate);
-  if(!ev.length)return;
-  const sells=ev.filter(e=>e.kind==='sell'),buys=ev.filter(e=>e.kind==='buy');
-  let out=[...sells,...buys.slice(0,4)];
-  if(buys.length>4)out.push({title:`${buys.length-4} weitere Kauf-Signale`,body:buys.slice(4).map(e=>e.title.split(': ')[1]).join(', '),kind:'buy'});
-  out.forEach(e=>{notify(e);nlog.unshift({...e,t:now})});
-  nlog=nlog.slice(0,30);store('bvr-nlog',nlog);
-}
-async function notify(e){
-  if(nset.browser&&'Notification' in window&&Notification.permission==='granted'){
-    try{if(swReg)await swReg.showNotification(e.title,{body:e.body,tag:e.title});else new Notification(e.title,{body:e.body,tag:e.title})}catch(x){console.warn('Benachrichtigung',x)}}
-  if(nset.topic){try{await fetch('https://ntfy.sh/',{method:'POST',body:JSON.stringify({topic:nset.topic,title:e.title,message:e.body,priority:e.kind==='sell'?5:4,tags:[e.kind==='sell'?'warning':'chart_with_upwards_trend']})})}catch(x){console.warn('ntfy',x)}}
-}
-function renderLog(){
-  $('#nLog').innerHTML=nlog.length?nlog.slice(0,10).map(e=>`<div class="jrow" style="grid-template-columns:52px 1fr"><span class="num muted">${new Date(e.t).toLocaleTimeString('de-CH',{hour:'2-digit',minute:'2-digit'})}</span><span><b class="${e.kind==='sell'?'down':'up'}">${e.title}</b><br><span class="muted">${e.body}</span></span></div>`).join('')
-    :'<div class="muted" style="padding:6px 0">Noch keine Benachrichtigungen gesendet.</div>';
-}
-function nStatus(){
-  const s=$('#nBrState');
-  if(!('Notification' in window))s.textContent='Dieser Browser zeigt hier keine Benachrichtigungen. Nutze die ntfy-App.';
-  else if(Notification.permission==='granted')s.textContent=nset.browser?'Aktiv':'Erlaubt, aber ausgeschaltet';
-  else if(Notification.permission==='denied')s.textContent='Im Browser blockiert. In den Website-Einstellungen erlauben.';
-  else s.textContent='Noch nicht erlaubt';
-  $('#nBrowser').textContent=nset.browser&&window.Notification?.permission==='granted'?'Browser-Benachrichtigungen ausschalten':'Browser-Benachrichtigungen einschalten';
-}
+// Push-Meldungen kommen nur noch vom Bot (früher schickte auch die offene App welche, das ergab Doppelte)
+function checkAlerts(){}
+function renderLog(){}
+async function sendTest(){if(!nset.topic)return false;try{const r=await fetch('https://ntfy.sh/',{method:'POST',body:JSON.stringify({topic:nset.topic,title:'Test: Crypto Handel Bitvavo',message:'Die Verbindung zu deinem ntfy-Kanal funktioniert.',tags:['white_check_mark']})});return r.ok}catch(e){return false}}
 function initNotify(){
   if(location.protocol==='https:'&&'serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').then(r=>swReg=r).catch(()=>{});
-  $('#nBuy').checked=nset.buy;$('#nLvl').value=String(nset.lvl);$('#nSell').checked=nset.sell;$('#nTopic').value=nset.topic;
-  $('#nBuy').addEventListener('change',e=>{nset.buy=e.target.checked;saveN()});
-  $('#nLvl').addEventListener('change',e=>{nset.lvl=+e.target.value;saveN()});
-  $('#nSell').addEventListener('change',e=>{nset.sell=e.target.checked;saveN()});
-  $('#nTopic').addEventListener('change',e=>{nset.topic=e.target.value.trim().replace(/[^A-Za-z0-9_-]/g,'');e.target.value=nset.topic;saveN()});
-  $('#nGen').addEventListener('click',()=>{nset.topic='bitvavo-radar-'+Math.random().toString(36).slice(2,10);$('#nTopic').value=nset.topic;saveN()});
+  $('#nTopic').value=nset.topic;
+  $('#nTopic').addEventListener('change',e=>{nset.topic=e.target.value.trim().replace(/[^A-Za-z0-9_-]/g,'');e.target.value=nset.topic;saveN();loadAuto()});
   $('#nCopy').addEventListener('click',()=>{const t=$('#nTopic');navigator.clipboard?.writeText(t.value).catch(()=>{});t.select()});
-  $('#nTest').addEventListener('click',async()=>{const b=$('#nTest');b.textContent='Sende…';await notify({title:'Test: Crypto Handel Bitvavo',body:'Benachrichtigungen funktionieren.',kind:'buy'});b.textContent='Test gesendet';setTimeout(()=>b.textContent='Test senden',2500)});
-  $('#nBrowser').addEventListener('click',async()=>{
-    if(!('Notification' in window)){nStatus();return}
-    if(nset.browser&&Notification.permission==='granted'){nset.browser=false}else{const p=await Notification.requestPermission();nset.browser=p==='granted'}
-    saveN();nStatus()});
-  $('#nWake').addEventListener('change',async e=>{
-    if(e.target.checked){try{wake=await navigator.wakeLock.request('screen')}catch(x){e.target.checked=false;$('#nWakeTxt').textContent='Nicht verfügbar in diesem Browser'}}
-    else{wake?.release();wake=null}});
-  document.addEventListener('visibilitychange',async()=>{if(document.visibilityState==='visible'&&$('#nWake').checked&&(!wake||wake.released)){try{wake=await navigator.wakeLock.request('screen')}catch(x){}}});
+  $('#nTest').addEventListener('click',async()=>{const b=$('#nTest');b.textContent='Sende…';const ok=await sendTest();b.textContent=ok?'Test gesendet':'Fehlgeschlagen';setTimeout(()=>b.textContent='Test senden',3000)});
   $('#cands').addEventListener('click',e=>{const r=e.target.closest('.cand');if(r&&results[r.dataset.m])select(r.dataset.m)});
   $('#pfList').addEventListener('click',e=>{const r=e.target.closest('.pfrow');if(r&&results[r.dataset.m])select(r.dataset.m)});
-  nStatus();renderLog();renderPf();
+  renderPf();
 }
 
 /* ---------- Papierhandel: simulierter API-Bot gegen deine eigenen Trades ---------- */
