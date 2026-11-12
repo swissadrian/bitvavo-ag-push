@@ -917,6 +917,18 @@ async function autoStep(tick24){
       msgs.push(['API-Schlüssel funktioniert ✓','Kontostand abgefragt (nur gelesen, nichts gehandelt): '+(pos.map(x=>`${x.symbol} ${(+x.available+ +(x.inOrder||0)).toLocaleString('de-CH',{maximumFractionDigits:x.symbol==='EUR'||x.symbol==='USDC'?2:6})}`).join(', ')||'kein Guthaben')+'. Die Automatik bleibt im Demo-Modus.'])}
     catch(e){st.auto.kontoTest={t:Date.now(),ok:false,fehler:String(e.message).slice(0,160)};msgs.push(['API-Schlüssel: Fehler',String(e.message).slice(0,200)+'. Bitte Schlüssel und Rechte bei Bitvavo prüfen.'])}
   }
+  // Kontostand für die App (nur lesen). Verschlüsselt mit dem ntfy-Kanal als Schlüssel: Das Logbuch ist öffentlich,
+  // lesen kann es nur, wer den Kanal kennt (die App auf deinem Handy). Alle 15 Minuten.
+  if(hasKey&&(!st.auto.kontoT||Date.now()-st.auto.kontoT>14*60e3)){
+    try{const bal=await priv('GET','/balance');st.auto.kontoT=Date.now();
+      const eurOf=(sym,q)=>sym==='EUR'?q:sym==='USDC'?q*usdcEur:(+tick24[sym+'-EUR']?.last||0)*q||(+tick24[sym+'-USDC']?.last||0)*q*usdcEur;
+      const rows=bal.map(x=>{const q=+x.available+ +(x.inOrder||0);return{symbol:x.symbol,menge:q,in_order:+(x.inOrder||0),wert_eur:+eurOf(x.symbol,q).toFixed(2)}}).filter(x=>x.menge>0).sort((a,b)=>b.wert_eur-a.wert_eur);
+      const plain=JSON.stringify({stand:new Date().toISOString(),usdc_eur:usdcEur,gesamt_eur:+rows.reduce((s,x)=>s+x.wert_eur,0).toFixed(2),guthaben:rows});
+      const salt=crypto.randomBytes(16),iv=crypto.randomBytes(12),key=crypto.pbkdf2Sync(TOPIC,salt,150000,32,'sha256'),c=crypto.createCipheriv('aes-256-gcm',key,iv);
+      const enc=Buffer.concat([c.update(plain,'utf8'),c.final(),c.getAuthTag()]);
+      fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/konto.enc',JSON.stringify({v:1,kdf:'pbkdf2-sha256-150000',salt:salt.toString('base64'),iv:iv.toString('base64'),data:enc.toString('base64')}));
+    }catch(e){console.warn('Kontostand',e.message)}
+  }
   const B=st.auto;
   // Rangliste: Marktkapitalisierung (CoinGecko), nur Coins mit liquidem USDC-Markt auf Bitvavo
   const liquid=markets.filter(m=>eligible(m)).map(m=>m.base);

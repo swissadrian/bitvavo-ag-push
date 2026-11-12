@@ -160,12 +160,22 @@ a{color:var(--accent)}
 .pcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 @media (max-width:620px){.pcols{grid-template-columns:minmax(0,1fr)}}
 .pcols.four{grid-template-columns:repeat(4,minmax(0,1fr))}
-.seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.seg button{border:0;border-radius:0;padding:12px 10px;font-weight:600;background:transparent;color:var(--muted);min-height:44px}
-.seg button+button{border-left:1px solid var(--line)}
-.seg button.on{background:var(--chip);color:var(--fg)}
-.seg button.on.live{background:color-mix(in srgb,var(--down) 16%,transparent);color:var(--down)}
-.seg button:disabled{opacity:.5;cursor:not-allowed}
+.modeswitch{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.modeswitch button{border:0;border-radius:0;padding:12px 10px;font-weight:600;background:transparent;color:var(--muted);min-height:44px}
+.modeswitch button+button{border-left:1px solid var(--line)}
+.modeswitch button.on{background:var(--chip);color:var(--fg)}
+.modeswitch button.on.live{background:color-mix(in srgb,var(--down) 16%,transparent);color:var(--down)}
+.modeswitch button:disabled{opacity:.5;cursor:not-allowed}
+.acards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:620px){.acards{grid-template-columns:minmax(0,1fr)}}
+.acard{border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.acard.act{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.acard .big{font-size:22px;font-variant-numeric:tabular-nums}
+.klist{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.krow{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:8px;font-size:13px}
+.toolbar .seg button{min-width:48px;padding:8px 12px}
+.toolbar>button,.toolbar .seg{height:38px}
+#theme{width:38px;min-width:38px;padding:0;font-size:16px}
 
 @media (max-width:620px){.pcols.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .pcol{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
@@ -807,22 +817,39 @@ function initNotify(){
 /* ---------- Papierhandel: simulierter API-Bot gegen deine eigenen Trades ---------- */
 let paper=null;
 // Automatik (Top 5 mit 50-Tage-Filter): Stand aus dem Logbuch des Bots
-let auto=null;
-async function loadAuto(){try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json?'+Math.floor(Date.now()/6e4))}catch(e){}renderAuto()}
+let auto=null,konto=null,kontoErr='';
+async function loadAuto(){try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json?'+Math.floor(Date.now()/6e4))}catch(e){}await loadKonto();renderAuto()}
+// Kontostand von Bitvavo: liegt verschlüsselt im öffentlichen Logbuch; entschlüsselt wird nur hier im Browser mit deinem ntfy-Kanal
+async function loadKonto(){
+  konto=null;kontoErr='';if(!nset.topic){kontoErr='topic';return}
+  try{const r=await fetch('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/konto.enc?'+Math.floor(Date.now()/6e4));if(!r.ok){kontoErr='keine';return}
+    const e=await r.json(),b64=x=>Uint8Array.from(atob(x),c=>c.charCodeAt(0));
+    const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(nset.topic.trim()),'PBKDF2',false,['deriveKey']);
+    const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(e.salt),iterations:150000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['decrypt']);
+    konto=JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(e.iv)},key,b64(e.data))))}
+  catch(e){kontoErr='falsch'}}
+function kontoCard(A,f){
+  let body;
+  if(!A.schluessel)body='<span class="muted">Kein API-Schlüssel hinterlegt.</span>';
+  else if(konto){const q=x=>x.toLocaleString('de-CH',{maximumFractionDigits:x>=100?2:6});
+    body=`<b class="big">${konto.gesamt_eur.toFixed(2)} €</b><span class="muted">≈ ${(konto.gesamt_eur/konto.usdc_eur).toFixed(2)} $ · Stand ${f(konto.stand)}</span>
+      <div class="klist">${konto.guthaben.slice(0,8).map(x=>`<div class="krow"><b>${x.symbol}</b><span class="num muted">${q(x.menge)}</span><span class="num">${x.wert_eur.toFixed(2)} €</span></div>`).join('')}</div>`}
+  else body=`<span class="muted">${kontoErr==='topic'?'Gesperrt: Trage unter «Benachrichtigungen» deinen ntfy-Kanal ein. Damit wird der Kontostand nur auf deinem Gerät entschlüsselt.':kontoErr==='falsch'?'Gesperrt: Der eingetragene ntfy-Kanal passt nicht.':'Noch keine Daten. Der Bot liest den Kontostand alle 15 Minuten (nur lesen).'}</span>`;
+  return `<div class="acard${A.modus==='live'?' act':''}"><span class="lbl">Bitvavo-Konto · API (nur für dich lesbar)</span>${body}</div>`}
 let autoArm=null,autoNote='';
 // Umschalter Demo / Live und Zusatzknöpfe; heikle Schritte brauchen ein zweites Tippen
 function autoSwitch(A){
   const live=A.modus==='live',paused=A.modus==='pausiert',hatPos=(A.positionen||[]).length>0;
   const b=(k,l,cls='')=>`<button type="button" data-auto="${k}" class="${autoArm===k?'primary':cls}">${autoArm===k?'Wirklich? Nochmals tippen':l}</button>`;
-  const seg=`<div class="seg" role="group" aria-label="Betriebsart">
+  const seg=`<div class="modeswitch" role="group" aria-label="Betriebsart">
       <button type="button" class="${!live?'on':''}" data-auto="${live||paused?'demo':'nix'}" aria-pressed="${!live}">${autoArm==='demo'?'Wirklich? Nochmals tippen':(live||paused)&&hatPos?'Demo (verkauft alles in USDC)':'Demo'}</button>
       <button type="button" class="${live?'on live':''}" data-auto="${live?'nix':'start'}" aria-pressed="${live}"${!A.schluessel&&!live?' disabled':''}>${autoArm==='start'?'Wirklich? Nochmals tippen':live?'Live':paused&&A.live_konto?'Live fortsetzen':'Live starten'}</button></div>`;
   const info=live?'Live: Der Bot handelt mit echtem Geld über die Bitvavo-API.'
     :paused?'Pausiert: keine neuen Orders, Bestände bleiben liegen.'
-    :A.schluessel?'Demo: Alles wird nur simuliert. Die API wird nicht benutzt, bis du auf «Live starten» tippst (zweimal). Dann tauscht der Bot 1000 € in USDC und kauft nach den Regeln.'
+    :A.schluessel?'Demo: Die Automatik wird nur simuliert. Die API liest nur den Kontostand. Gehandelt wird erst, wenn du auf «Live starten» tippst (zweimal): Dann tauscht der Bot 1000 € in USDC und kauft nach den Regeln.'
     :'Demo: Alles wird nur simuliert. «Live starten» wird erst möglich, wenn die API-Schlüssel als GitHub-Secrets hinterlegt sind.';
   const kt=A.konto_test,ktTxt=kt?(kt.ok?`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="up">funktioniert</b> (${new Date(kt.zeit).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}, nur Kontostand gelesen)</div>`:`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="down">Fehler</b> – ${kt.fehler||''}</div>`):'';
-  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${seg}<div class="muted" style="font-size:12px">${info}</div>${ktTxt}
+  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${seg}<div class="muted" style="font-size:12px">${info}</div>${ktTxt}
     <div class="posform" style="flex-wrap:wrap">${b('status','Status per Push')}${live?b('stopp','Pausieren'):''}${(live||paused)&&hatPos?b('verkaufen','Alles in USDC verkaufen'):''}</div>
     <div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div></div>`;
 }
@@ -841,18 +868,19 @@ function renderAuto(){
   const A=auto,f=d=>new Date(d).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
   $('#autoTime').textContent=`Stand ${f(A.stand)}`;
   const mod={papier:'Demo (simuliert)',live:'Live (echtes Geld)',pausiert:'Pausiert'}[A.modus]||A.modus;
-  const head=`<div class="pcols four"><div class="pcol"><span class="lbl">Modus</span><b>${mod}</b><span class="muted">${A.schluessel?'API-Schlüssel vorhanden':'kein API-Schlüssel hinterlegt'}</span></div>
-    <div class="pcol"><span class="lbl">Wert</span><b>${A.wert_usdc.toFixed(2)} $</b><span class="muted">${A.wert_eur.toFixed(2)} € · Start ${A.start_eur} €</span></div>
-    <div class="pcol"><span class="lbl">Ergebnis</span><b class="${A.ergebnis_pct>=0?'up':'down'}">${pct(A.ergebnis_pct)}</b><span class="muted">${A.ergebnis_eur>=0?'+':''}${A.ergebnis_eur.toFixed(2)} € · ${A.trades} Orders · Gebühren ${A.gebuehren_usdc.toFixed(2)} $</span></div>
-    <div class="pcol"><span class="lbl">USDC</span><b>${A.usdc.toFixed(2)} $</b><span class="muted">${A.reserve_pct}% des Werts</span></div></div>`;
+  const sgn=v=>(v>=0?'+':'')+v.toFixed(2);
+  const demo=`<div class="acard${A.modus!=='live'?' act':''}"><span class="lbl">${A.modus==='live'?'Automatik · live':A.modus==='pausiert'?'Automatik · pausiert':'Demo · simuliert'}</span>
+    <b class="big">${A.wert_usdc.toFixed(2)} $</b><span class="muted">${A.wert_eur.toFixed(2)} € · Start ${A.start_eur} €</span>
+    <span><b class="${A.ergebnis_pct>=0?'up':'down'}">${pct(A.ergebnis_pct)}</b> <span class="muted">(${sgn(A.ergebnis_eur)} €)</span></span>
+    <span class="muted">USDC ${A.usdc.toFixed(2)} $ (${A.reserve_pct}%) · ${A.trades} Orders · Gebühren ${A.gebuehren_usdc.toFixed(2)} $</span></div>`;
+  const head=`<div class="acards">${demo}${kontoCard(A,f)}</div>`;
   const pos=Object.fromEntries((A.positionen||[]).map(p=>[p.coin,p]));
   const coins=[...new Set([...(A.top5||[]),...Object.keys(pos)])];
   const rows=coins.map(c=>{const s=A.signale?.[c]||{},p=pos[c];return `<div class="jrow" style="grid-template-columns:56px 1fr 1fr 70px">
     <b>${c}</b><span class="num ${s.ueber?'up':'down'}">${s.ueber?'über':'unter'} Ø50 ${s.abstand_pct!=null?`(${s.abstand_pct>0?'+':''}${s.abstand_pct}%)`:''}</span>
     <span class="num muted">${p?`${p.wert_usdc.toFixed(2)} $ · ${p.anteil_pct}%`:'kein Bestand'}</span><span class="tag ${s.top5?(s.ueber?'win':'open'):'loss'}">${s.top5?(s.ueber?'halten':'USDC'):'nicht Top 5'}</span></div>`}).join('');
   const ord=(A.letzte_orders||[]).slice(0,6).map(o=>`<div class="muted" style="font-size:12px">${f(o.t)} · ${o.side==='buy'?'Kauf':'Verkauf'} ${o.c} ${o.usdc.toFixed(2)} $ zu ${fmtP(o.preis)} $</div>`).join('');
-  el.innerHTML=head+`<div style="display:flex;flex-direction:column;gap:2px;margin-top:10px">${rows}</div>`+(ord?`<div style="margin-top:10px;display:flex;flex-direction:column;gap:2px"><span class="lbl">Letzte Orders</span>${ord}</div>`:'')+
-    autoSwitch(A)+
+  el.innerHTML=head+autoSwitch(A)+`<div style="display:flex;flex-direction:column;gap:2px;margin-top:12px">${rows}</div>`+(ord?`<div style="margin-top:10px;display:flex;flex-direction:column;gap:2px"><span class="lbl">Letzte Orders</span>${ord}</div>`:'')+
     `<div class="muted" style="font-size:12px;margin-top:8px">Letzter Handelstag ${A.letzter_handelstag||'–'} · Regeln: ${A.regeln.reserve_pct}% Reserve, ${A.regeln.je_coin_pct}% je Coin, Durchschnitt ${A.regeln.sma_tage} Tage, Band ±${A.regeln.band_pp} Prozentpunkte</div>`;
   el.querySelectorAll('[data-auto]').forEach(b=>b.addEventListener('click',()=>autoCmd(b.dataset.auto)));
 }
