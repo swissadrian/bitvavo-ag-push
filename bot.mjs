@@ -265,7 +265,7 @@ async function readCommands(){
         if(part){p.qty-=qq;p.cost=cost-cs;confirmations.push({kind:'part',mk,q:qq,rest:p.qty,sell,eur,net})}
         else{delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy,eur,net})}}
       else confirmations.push({kind:'unknown',mk});
-    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier|demo)\b/i))autoCmds.push(x[1].toLowerCase()==='demo'?'papier':x[1].toLowerCase());
+    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier|demo|test)\b/i))autoCmds.push(x[1].toLowerCase()==='demo'?'papier':x[1].toLowerCase());
     else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
     else confirmations.push({kind:'help',t});
   }
@@ -909,6 +909,14 @@ async function autoStep(tick24){
       else if(cmd==='status')A.statusPush=true;
     }catch(e){msgs.push(['Automatik: Fehler bei «auto '+cmd+'»',String(e.message).slice(0,200)])}
   }
+  // Lesetest des API-Schlüssels (nur Kontostand abfragen, kein Handel): beim ersten Erkennen, auf «auto test» und einmal täglich.
+  // Beträge gehen nur per Push an dich, ins öffentliche Logbuch kommt nur «ok» oder der Fehler.
+  if(hasKey&&(autoCmds.includes('test')||!st.auto.kontoTest||Date.now()-st.auto.kontoTest.t>DAY_MS)){
+    try{const bal=await priv('GET','/balance');const pos=bal.filter(x=>+x.available+ +(x.inOrder||0)>0);
+      st.auto.kontoTest={t:Date.now(),ok:true,waehrungen:pos.length};
+      msgs.push(['API-Schlüssel funktioniert ✓','Kontostand abgefragt (nur gelesen, nichts gehandelt): '+(pos.map(x=>`${x.symbol} ${(+x.available+ +(x.inOrder||0)).toLocaleString('de-CH',{maximumFractionDigits:x.symbol==='EUR'||x.symbol==='USDC'?2:6})}`).join(', ')||'kein Guthaben')+'. Die Automatik bleibt im Demo-Modus.'])}
+    catch(e){st.auto.kontoTest={t:Date.now(),ok:false,fehler:String(e.message).slice(0,160)};msgs.push(['API-Schlüssel: Fehler',String(e.message).slice(0,200)+'. Bitte Schlüssel und Rechte bei Bitvavo prüfen.'])}
+  }
   const B=st.auto;
   // Rangliste: Marktkapitalisierung (CoinGecko), nur Coins mit liquidem USDC-Markt auf Bitvavo
   const liquid=markets.filter(m=>eligible(m)).map(m=>m.base);
@@ -951,7 +959,7 @@ async function autoStep(tick24){
     if(Object.values(abgleich).some(x=>!x.ok))msgs.push(['Automatik: Bestand weicht ab','Auf dem Konto ist weniger vorhanden als im Kassenbuch. Bitte prüfen (manuell verkauft?).'])}catch(e){console.warn('Abgleich',e.message)}}
   const V=value(),startEur=AUTO.start_eur;
   const h=new Date().toISOString().slice(0,13).replace('T',' ');if(!B.kurve.length||B.kurve.at(-1).t!==h)B.kurve.push({t:h,usdc:+V.toFixed(2)});if(B.kurve.length>2000)B.kurve=B.kurve.filter((_,i)=>i%2===0);
-  const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,live_konto:!!B.live,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
+  const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,live_konto:!!B.live,konto_test:B.kontoTest?{zeit:new Date(B.kontoTest.t).toISOString(),ok:B.kontoTest.ok,fehler:B.kontoTest.fehler||null}:null,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
     wert_usdc:+V.toFixed(2),wert_eur:+(V*usdcEur).toFixed(2),ergebnis_eur:+(V*usdcEur-startEur).toFixed(2),ergebnis_pct:+((V/B.start_usdc-1)*100).toFixed(2),
     usdc:+B.cash.toFixed(2),reserve_pct:+(B.cash/V*100).toFixed(1),trades:B.trades,gebuehren_usdc:+B.fees.toFixed(2),letzter_handelstag:B.tag,
     top5:top,positionen:Object.entries(B.pos).map(([c,q])=>({coin:c,menge:+q.toFixed(8),kurs:books[c]?.bid??null,wert_usdc:+(q*(books[c]?.bid||0)).toFixed(2),anteil_pct:+(q*(books[c]?.bid||0)/V*100).toFixed(1)})),

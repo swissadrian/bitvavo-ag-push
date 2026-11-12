@@ -1,5 +1,5 @@
 // Service Worker: App vom Startbildschirm starten, offline die letzte Version zeigen, Benachrichtigungen
-const CACHE='radar-v5', SHELL=['./','./index.html','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE='radar-v6', SHELL=['./','./index.html','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)));self.skipWaiting()});
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==CACHE).map(x=>caches.delete(x)))).then(()=>self.clients.claim())));
 // Nur die App selbst wird zwischengespeichert: zuerst immer frisch vom Server (no-cache), offline aus dem Cache. Marktdaten kommen immer live

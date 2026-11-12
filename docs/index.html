@@ -821,7 +821,8 @@ function autoSwitch(A){
     :paused?'Pausiert: keine neuen Orders, Bestände bleiben liegen.'
     :A.schluessel?'Demo: Alles wird nur simuliert. Die API wird nicht benutzt, bis du auf «Live starten» tippst (zweimal). Dann tauscht der Bot 1000 € in USDC und kauft nach den Regeln.'
     :'Demo: Alles wird nur simuliert. «Live starten» wird erst möglich, wenn die API-Schlüssel als GitHub-Secrets hinterlegt sind.';
-  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${seg}<div class="muted" style="font-size:12px">${info}</div>
+  const kt=A.konto_test,ktTxt=kt?(kt.ok?`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="up">funktioniert</b> (${new Date(kt.zeit).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}, nur Kontostand gelesen)</div>`:`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="down">Fehler</b> – ${kt.fehler||''}</div>`):'';
+  return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">${seg}<div class="muted" style="font-size:12px">${info}</div>${ktTxt}
     <div class="posform" style="flex-wrap:wrap">${b('status','Status per Push')}${live?b('stopp','Pausieren'):''}${(live||paused)&&hatPos?b('verkaufen','Alles in USDC verkaufen'):''}</div>
     <div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div></div>`;
 }
