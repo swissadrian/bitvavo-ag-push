@@ -1,0 +1,999 @@
+{
+ "erstellt": "2026-11-04T16:05:51.917Z",
+ "regeln": {
+  "betrag": 100,
+  "kapital": 1000,
+  "maxPos": 10,
+  "geo": {
+   "sl": 3,
+   "minRisk": 0.025,
+   "tp": 3,
+   "h": 48
+  },
+  "merkmale": "v1+fg"
+ },
+ "diagnose": [
+  {
+   "monat": "2025-11",
+   "modell_top10_r": -0.227,
+   "modell_top10_treffer": 0.087,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 8436,
+   "coin_stunden": 64926
+  },
+  {
+   "monat": "2025-12",
+   "modell_top10_r": -0.182,
+   "modell_top10_treffer": 0.099,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 11199,
+   "coin_stunden": 67493
+  },
+  {
+   "monat": "2026-01",
+   "modell_top10_r": -0.464,
+   "modell_top10_treffer": 0.063,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 3364,
+   "coin_stunden": 71294
+  },
+  {
+   "monat": "2026-02",
+   "modell_top10_r": -0.244,
+   "modell_top10_treffer": 0.109,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 4747,
+   "coin_stunden": 67172
+  },
+  {
+   "monat": "2026-03",
+   "modell_top10_r": -0.256,
+   "modell_top10_treffer": 0.12,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 7644,
+   "coin_stunden": 74639
+  },
+  {
+   "monat": "2026-04",
+   "modell_top10_r": -0.31,
+   "modell_top10_treffer": 0.122,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 9637,
+   "coin_stunden": 73188
+  },
+  {
+   "monat": "2026-05",
+   "modell_top10_r": -0.056,
+   "modell_top10_treffer": 0.152,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 4387,
+   "coin_stunden": 78597
+  },
+  {
+   "monat": "2026-06",
+   "modell_top10_r": 0.03,
+   "modell_top10_treffer": 0.148,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 8986,
+   "coin_stunden": 79416
+  },
+  {
+   "monat": "2026-07",
+   "modell_top10_r": -0.012,
+   "modell_top10_treffer": 0.152,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 7319,
+   "coin_stunden": 82897
+  },
+  {
+   "monat": "2026-08",
+   "modell_top10_r": -0.18,
+   "modell_top10_treffer": 0.102,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 0,
+   "stunden_top10": 11023,
+   "coin_stunden": 84391
+  },
+  {
+   "monat": "2026-09",
+   "modell_top10_r": 0.186,
+   "modell_top10_treffer": 0.228,
+   "stunden_starker_kauf": 0,
+   "stunden_kauf": 7144,
+   "stunden_top10": 3433,
+   "coin_stunden": 84026
+  },
+  {
+   "monat": "2026-10",
+   "modell_top10_r": 0.311,
+   "modell_top10_treffer": 0.269,
+   "stunden_starker_kauf": 9629,
+   "stunden_kauf": 33697,
+   "stunden_top10": 9629,
+   "coin_stunden": 87774
+  },
+  {
+   "monat": "2026-11",
+   "modell_top10_r": 0.516,
+   "modell_top10_treffer": 0.309,
+   "stunden_starker_kauf": 32,
+   "stunden_kauf": 165,
+   "stunden_top10": 32,
+   "coin_stunden": 10799
+  }
+ ],
+ "varianten": {
+  "heute (Starker Kauf, nachziehender Stop, Verkaufssignal) · Markt": {
+   "ende": 796.37,
+   "gesamt_pct": -20.36,
+   "trades": 254,
+   "gewinner_pct": 36,
+   "schnitt_eur": -0.81,
+   "gruende": {
+    "Ziel": 20,
+    "Stop-Loss": 123,
+    "Nachziehender Stop": 64,
+    "Haltedauer": 34,
+    "Verkaufssignal": 13
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2025-12",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-01",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-02",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-04",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-05",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-06",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-07",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-09",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-10",
+     "pct": -19.59,
+     "trades": 244
+    },
+    {
+     "monat": "2026-11",
+     "pct": -0.78,
+     "trades": 10
+    }
+   ],
+   "tiefster_stand": 796.37
+  },
+  "heute (Starker Kauf, nachziehender Stop, Verkaufssignal) · Limit": {
+   "ende": 724.83,
+   "gesamt_pct": -27.52,
+   "trades": 240,
+   "gewinner_pct": 30,
+   "schnitt_eur": -1.17,
+   "gruende": {
+    "Nachziehender Stop": 56,
+    "Stop-Loss": 124,
+    "Haltedauer": 26,
+    "Ziel": 15,
+    "Verkaufssignal": 19
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2025-12",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-01",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-02",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-04",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-05",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-06",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-07",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-09",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-10",
+     "pct": -27.2,
+     "trades": 231
+    },
+    {
+     "monat": "2026-11",
+     "pct": -0.31,
+     "trades": 9
+    }
+   ],
+   "tiefster_stand": 724.83
+  },
+  "nach Plan (Starker Kauf, nur Stop/Ziel/Haltedauer) · Markt": {
+   "ende": 766.57,
+   "gesamt_pct": -23.34,
+   "trades": 206,
+   "gewinner_pct": 26,
+   "schnitt_eur": -1.14,
+   "gruende": {
+    "Ziel": 25,
+    "Stop-Loss": 127,
+    "Haltedauer": 54
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2025-12",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-01",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-02",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-04",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-05",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-06",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-07",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-09",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-10",
+     "pct": -21.3,
+     "trades": 196
+    },
+    {
+     "monat": "2026-11",
+     "pct": -2.05,
+     "trades": 10
+    }
+   ],
+   "tiefster_stand": 766.57
+  },
+  "nach Plan (Starker Kauf, nur Stop/Ziel/Haltedauer) · Limit": {
+   "ende": 731.87,
+   "gesamt_pct": -26.81,
+   "trades": 206,
+   "gewinner_pct": 23,
+   "schnitt_eur": -1.33,
+   "gruende": {
+    "Stop-Loss": 135,
+    "Haltedauer": 47,
+    "Ziel": 24
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2025-12",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-01",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-02",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-04",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-05",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-06",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-07",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-09",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-10",
+     "pct": -25.05,
+     "trades": 197
+    },
+    {
+     "monat": "2026-11",
+     "pct": -1.77,
+     "trades": 9
+    }
+   ],
+   "tiefster_stand": 731.87
+  },
+  "Top 10 % immer (nur Stop/Ziel/Haltedauer) · Markt": {
+   "ende": 156.6,
+   "gesamt_pct": -84.34,
+   "trades": 989,
+   "gewinner_pct": 30,
+   "schnitt_eur": -0.85,
+   "gruende": {
+    "Ziel": 118,
+    "Stop-Loss": 554,
+    "Haltedauer": 317
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": -3.74,
+     "trades": 170
+    },
+    {
+     "monat": "2025-12",
+     "pct": -26.91,
+     "trades": 156
+    },
+    {
+     "monat": "2026-01",
+     "pct": -0.91,
+     "trades": 116
+    },
+    {
+     "monat": "2026-02",
+     "pct": -22.22,
+     "trades": 99
+    },
+    {
+     "monat": "2026-03",
+     "pct": -6.96,
+     "trades": 86
+    },
+    {
+     "monat": "2026-04",
+     "pct": 1.43,
+     "trades": 72
+    },
+    {
+     "monat": "2026-05",
+     "pct": -0.73,
+     "trades": 82
+    },
+    {
+     "monat": "2026-06",
+     "pct": -10.97,
+     "trades": 61
+    },
+    {
+     "monat": "2026-07",
+     "pct": -9.13,
+     "trades": 43
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0.52,
+     "trades": 32
+    },
+    {
+     "monat": "2026-09",
+     "pct": 2.82,
+     "trades": 36
+    },
+    {
+     "monat": "2026-10",
+     "pct": -7.24,
+     "trades": 35
+    },
+    {
+     "monat": "2026-11",
+     "pct": -0.28,
+     "trades": 1
+    }
+   ],
+   "tiefster_stand": 156.6
+  },
+  "Top 10 % immer (nur Stop/Ziel/Haltedauer) · Limit": {
+   "ende": 329.14,
+   "gesamt_pct": -67.09,
+   "trades": 1001,
+   "gewinner_pct": 30,
+   "schnitt_eur": -0.68,
+   "gruende": {
+    "Ziel": 118,
+    "Stop-Loss": 554,
+    "Haltedauer": 329
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": -12.15,
+     "trades": 171
+    },
+    {
+     "monat": "2025-12",
+     "pct": -27.93,
+     "trades": 138
+    },
+    {
+     "monat": "2026-01",
+     "pct": -1.82,
+     "trades": 101
+    },
+    {
+     "monat": "2026-02",
+     "pct": -20.49,
+     "trades": 85
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0.88,
+     "trades": 67
+    },
+    {
+     "monat": "2026-04",
+     "pct": 7.03,
+     "trades": 70
+    },
+    {
+     "monat": "2026-05",
+     "pct": -3.3,
+     "trades": 87
+    },
+    {
+     "monat": "2026-06",
+     "pct": -10.2,
+     "trades": 62
+    },
+    {
+     "monat": "2026-07",
+     "pct": -7.71,
+     "trades": 51
+    },
+    {
+     "monat": "2026-08",
+     "pct": 3.56,
+     "trades": 42
+    },
+    {
+     "monat": "2026-09",
+     "pct": 7.45,
+     "trades": 44
+    },
+    {
+     "monat": "2026-10",
+     "pct": -1.57,
+     "trades": 79
+    },
+    {
+     "monat": "2026-11",
+     "pct": -0.84,
+     "trades": 4
+    }
+   ],
+   "tiefster_stand": 243.1
+  },
+  "Top 10 % immer (nachziehender Stop, Verkaufssignal) · Markt": {
+   "ende": 98.84,
+   "gesamt_pct": -90.12,
+   "trades": 1108,
+   "gewinner_pct": 36,
+   "schnitt_eur": -0.81,
+   "gruende": {
+    "Nachziehender Stop": 277,
+    "Ziel": 63,
+    "Stop-Loss": 438,
+    "Verkaufssignal": 162,
+    "Haltedauer": 168
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": -15.48,
+     "trades": 194
+    },
+    {
+     "monat": "2025-12",
+     "pct": -23.42,
+     "trades": 173
+    },
+    {
+     "monat": "2026-01",
+     "pct": -2.3,
+     "trades": 133
+    },
+    {
+     "monat": "2026-02",
+     "pct": -14.19,
+     "trades": 128
+    },
+    {
+     "monat": "2026-03",
+     "pct": -9.41,
+     "trades": 94
+    },
+    {
+     "monat": "2026-04",
+     "pct": 1.78,
+     "trades": 76
+    },
+    {
+     "monat": "2026-05",
+     "pct": -7.25,
+     "trades": 129
+    },
+    {
+     "monat": "2026-06",
+     "pct": -8.22,
+     "trades": 60
+    },
+    {
+     "monat": "2026-07",
+     "pct": -6.87,
+     "trades": 44
+    },
+    {
+     "monat": "2026-08",
+     "pct": -0.35,
+     "trades": 26
+    },
+    {
+     "monat": "2026-09",
+     "pct": -1.41,
+     "trades": 28
+    },
+    {
+     "monat": "2026-10",
+     "pct": -2.99,
+     "trades": 23
+    },
+    {
+     "monat": "2026-11",
+     "pct": 0,
+     "trades": 0
+    }
+   ],
+   "tiefster_stand": 98.84
+  },
+  "Top 10 % immer (nachziehender Stop, Verkaufssignal) · Limit": {
+   "ende": 151.82,
+   "gesamt_pct": -84.82,
+   "trades": 1052,
+   "gewinner_pct": 34,
+   "schnitt_eur": -0.81,
+   "gruende": {
+    "Ziel": 55,
+    "Nachziehender Stop": 247,
+    "Stop-Loss": 428,
+    "Haltedauer": 153,
+    "Verkaufssignal": 169
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": -16.36,
+     "trades": 192
+    },
+    {
+     "monat": "2025-12",
+     "pct": -26.01,
+     "trades": 153
+    },
+    {
+     "monat": "2026-01",
+     "pct": -2.82,
+     "trades": 119
+    },
+    {
+     "monat": "2026-02",
+     "pct": -15.47,
+     "trades": 107
+    },
+    {
+     "monat": "2026-03",
+     "pct": -4.66,
+     "trades": 84
+    },
+    {
+     "monat": "2026-04",
+     "pct": -1.73,
+     "trades": 78
+    },
+    {
+     "monat": "2026-05",
+     "pct": -3.38,
+     "trades": 123
+    },
+    {
+     "monat": "2026-06",
+     "pct": -9.14,
+     "trades": 54
+    },
+    {
+     "monat": "2026-07",
+     "pct": -4.59,
+     "trades": 43
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0.6,
+     "trades": 26
+    },
+    {
+     "monat": "2026-09",
+     "pct": -0.85,
+     "trades": 32
+    },
+    {
+     "monat": "2026-10",
+     "pct": 0.3,
+     "trades": 36
+    },
+    {
+     "monat": "2026-11",
+     "pct": -0.73,
+     "trades": 5
+    }
+   ],
+   "tiefster_stand": 151.82
+  },
+  "nach Plan (Starker Kauf, nur Stop/Ziel/Haltedauer) · Markt ohne Spread": {
+   "ende": 778.71,
+   "gesamt_pct": -22.13,
+   "trades": 207,
+   "gewinner_pct": 26,
+   "schnitt_eur": -1.08,
+   "gruende": {
+    "Ziel": 24,
+    "Stop-Loss": 128,
+    "Haltedauer": 55
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2025-12",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-01",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-02",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-03",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-04",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-05",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-06",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-07",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-08",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-09",
+     "pct": 0,
+     "trades": 0
+    },
+    {
+     "monat": "2026-10",
+     "pct": -20.28,
+     "trades": 197
+    },
+    {
+     "monat": "2026-11",
+     "pct": -1.85,
+     "trades": 10
+    }
+   ],
+   "tiefster_stand": 778.71
+  },
+  "Top 10 % immer (nur Stop/Ziel/Haltedauer) · Markt ohne Spread": {
+   "ende": 240.28,
+   "gesamt_pct": -75.97,
+   "trades": 1070,
+   "gewinner_pct": 31,
+   "schnitt_eur": -0.71,
+   "gruende": {
+    "Ziel": 133,
+    "Stop-Loss": 591,
+    "Haltedauer": 346
+   },
+   "monate": [
+    {
+     "monat": "2025-11",
+     "pct": -4.48,
+     "trades": 170
+    },
+    {
+     "monat": "2025-12",
+     "pct": -25.03,
+     "trades": 153
+    },
+    {
+     "monat": "2026-01",
+     "pct": -3.17,
+     "trades": 116
+    },
+    {
+     "monat": "2026-02",
+     "pct": -21.16,
+     "trades": 100
+    },
+    {
+     "monat": "2026-03",
+     "pct": -3.69,
+     "trades": 87
+    },
+    {
+     "monat": "2026-04",
+     "pct": 3.23,
+     "trades": 84
+    },
+    {
+     "monat": "2026-05",
+     "pct": -1.97,
+     "trades": 89
+    },
+    {
+     "monat": "2026-06",
+     "pct": -11.35,
+     "trades": 71
+    },
+    {
+     "monat": "2026-07",
+     "pct": -9.5,
+     "trades": 52
+    },
+    {
+     "monat": "2026-08",
+     "pct": 1.08,
+     "trades": 43
+    },
+    {
+     "monat": "2026-09",
+     "pct": 7.81,
+     "trades": 41
+    },
+    {
+     "monat": "2026-10",
+     "pct": -6.68,
+     "trades": 61
+    },
+    {
+     "monat": "2026-11",
+     "pct": -1.06,
+     "trades": 3
+    }
+   ],
+   "tiefster_stand": 228.76
+  }
+ },
+ "btc": [
+  {
+   "monat": "2025-11",
+   "pct": -21.07
+  },
+  {
+   "monat": "2025-12",
+   "pct": -0.64
+  },
+  {
+   "monat": "2026-01",
+   "pct": -10.49
+  },
+  {
+   "monat": "2026-02",
+   "pct": -15.09
+  },
+  {
+   "monat": "2026-03",
+   "pct": 4.15
+  },
+  {
+   "monat": "2026-04",
+   "pct": 10.48
+  },
+  {
+   "monat": "2026-05",
+   "pct": -2.81
+  },
+  {
+   "monat": "2026-06",
+   "pct": -19.05
+  },
+  {
+   "monat": "2026-07",
+   "pct": 6.39
+  },
+  {
+   "monat": "2026-08",
+   "pct": 24.07
+  },
+  {
+   "monat": "2026-09",
+   "pct": 8.8
+  },
+  {
+   "monat": "2026-10",
+   "pct": -5.56
+  },
+  {
+   "monat": "2026-11",
+   "pct": 2.79
+  }
+ ],
+ "dauer_s": 181
+}
