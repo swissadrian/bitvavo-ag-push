@@ -165,3 +165,23 @@ Befehle an den Bot (ntfy-Kanal mit `-cmd`): `kauf BTC-USDC 71500 0.02`, `verkauf
 - **Kurse:** Binance (USDT), Lücken aus Bitfinex (USD) und Bitvavo (EUR × EZB).
 - **Kosten:** 0,10 % je Trade.
 - **Skript und Ergebnis:** `research/top5_backtest.mjs`, `research/ergebnis_top5_backtest.json`. Starten im Tab Actions mit dem Workflow «Rückwärtstest».
+
+## Risikoprüfung der Automatik
+
+Jede Order der Automatik geht vor der Ausführung durch eine unabhängige Prüfung (`pruefeOrder` in `auto-logik.mjs`, Grenzen im Objekt `RISK`). Eine blockierte Order wird nicht ausgeführt. Der Bot meldet den Grund per Push, die übrigen Orders laufen weiter.
+
+- **Markt:** nur `<Coin>-USDC`. Gekauft werden nur Coins der heutigen Top 5, verkauft nur Coins aus dem Kassenbuch.
+- **Kauf:** höchstens 25 % des Kassenbuchwerts. Verkäufe sind durch den Bestand begrenzt, damit ein Ausstieg nie blockiert wird.
+- **Tageslimit:** höchstens 12 Orders pro Tag (UTC).
+- **Spread:** höchstens 0,5 % (Brief/Geld − 1).
+- **Kurs:** Ein Kauf wird blockiert, wenn der Kurs mehr als 10 % vom letzten Tagesschluss abweicht. Ein Verkauf wird trotzdem ausgeführt, mit Warnung.
+- **Menge:** Verkauft wird nie mehr, als im Kassenbuch und auf dem Konto liegt.
+- **Reserve:** Die 5 % Reserve in USDC werden nie unterschritten.
+- **Kontoabgleich:** Stimmen Kassenbuch und Konto nicht überein, gibt es keine Käufe, bis es wieder stimmt. Verkäufe gehen weiter.
+- **Notausstieg** («auto verkaufen»): Geprüft werden nur Markt und Menge. Spread, Tageslimit und Kursabweichung erzeugen nur eine Warnung.
+
+**CoinGecko-Ausfall:** Die letzte gültige Top-5-Liste wird gespeichert. Ist sie höchstens 3 Tage alt, verwendet der Bot sie. Sonst handelt er an diesem Tag nicht und versucht es bei späteren Läufen wieder. Er sortiert nie stillschweigend nach Umsatz.
+
+**Plan:** Vor jeder Ausführung schreibt die Automatik den Plan des Tages nach `analyse/auto-plan.json`, mit jeder Order und dem Ergebnis der Prüfung. Die App zeigt ihn an. Mit «auto bestätigen ein» führt der Bot den Plan erst nach «auto ja» aus (gültig bis 23:59 UTC). Standard ist aus.
+
+**Tests:** Die Tests liegen in `test/` und laufen mit `node --test test/*.test.mjs`. Der Workflow «Tests» führt sie bei jedem Push aus. Zusätzlich lässt der Bot sie bei jeder neuen Version vor dem Handel laufen. Schlagen sie fehl, handelt die Automatik nicht (Notausstieg geht weiterhin).

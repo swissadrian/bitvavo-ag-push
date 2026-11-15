@@ -9,7 +9,7 @@ main(){
   local INTERVAL=${INTERVAL:-300}
   local END=$(( $(date +%s) + ${LOOP_MINUTES:-345} * 60 ))
   local URL="${LOG_REMOTE:-https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git}"
-  local n=0 T0 NEXT NOW
+  local n=0 T0 NEXT NOW TESTED='' TESTS_OK=1
   # Logbuch einmal pro Durchgang holen und danach behalten (spart Datenvolumen)
   rm -rf logdata
   if ! git clone -q --depth 1 --branch logs "$URL" logdata 2>/dev/null; then
@@ -19,7 +19,14 @@ main(){
     T0=$(date +%s); n=$((n+1))
     echo "::group::Lauf $n – $(date -u '+%H:%M') UTC"
     git fetch -q origin main && git reset -q --hard origin/main    # immer die neueste Bot-Version
-    node --max-old-space-size=6144 bot.mjs || echo "Bot mit Fehler beendet (Meldung per ntfy)"
+    # Neue Version? Dann zuerst die Tests. Schlagen sie fehl, handelt die Automatik nicht (TESTS_OK=0).
+    if [ "$(git rev-parse HEAD)" != "$TESTED" ]; then
+      TESTED=$(git rev-parse HEAD)
+      if ls test/*.test.mjs >/dev/null 2>&1; then
+        if node --test test/*.test.mjs >/tmp/tests.log 2>&1; then TESTS_OK=1; else TESTS_OK=0; tail -30 /tmp/tests.log; fi
+      fi
+    fi
+    TESTS_OK=$TESTS_OK node --max-old-space-size=6144 bot.mjs || echo "Bot mit Fehler beendet (Meldung per ntfy)"
     save_log "$n"
     echo "::endgroup::"
     NEXT=$(( T0 + INTERVAL )); NOW=$(date +%s)

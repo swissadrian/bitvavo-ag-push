@@ -763,8 +763,9 @@ function initNotify(){
 /* ---------- Papierhandel: simulierter API-Bot gegen deine eigenen Trades ---------- */
 let paper=null;
 // Automatik (Top 5 mit 50-Tage-Filter): Stand aus dem Logbuch des Bots
-let auto=null,konto=null,kontoErr='';
-async function loadAuto(){try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json?'+Math.floor(Date.now()/6e4))}catch(e){}await loadKonto();renderAuto()}
+let auto=null,konto=null,kontoErr='',autoPlan=null;
+async function loadAuto(){const q='?'+Math.floor(Date.now()/6e4);try{auto=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto.json'+q)}catch(e){}
+  try{autoPlan=await j('https://raw.githubusercontent.com/swissadrian/bitvavo-ag-push/logs/analyse/auto-plan.json'+q)}catch(e){autoPlan=null}await loadKonto();renderAuto()}
 // Kontostand von Bitvavo: liegt verschlüsselt im öffentlichen Logbuch; entschlüsselt wird nur hier im Browser mit deinem ntfy-Kanal
 async function loadKonto(){
   konto=null;kontoErr='';if(!nset.topic){kontoErr='topic';return}
@@ -783,6 +784,18 @@ function kontoCard(A,f){
   else body=`<span class="muted">${kontoErr==='topic'?'Gesperrt: Trage unter «Benachrichtigungen» deinen ntfy-Kanal ein. Damit wird der Kontostand nur auf deinem Gerät entschlüsselt.':kontoErr==='falsch'?'Gesperrt: Der eingetragene ntfy-Kanal passt nicht.':'Noch keine Daten. Der Bot liest den Kontostand alle 15 Minuten (nur lesen).'}</span>`;
   return `<div class="acard${A.modus==='live'?' act':''}"><span class="lbl">Bitvavo-Konto · API (nur für dich lesbar)</span>${body}</div>`}
 let autoArm=null,autoNote='';
+// Plan des letzten Laufs: jede Order mit dem Ergebnis der Risikoprüfung
+function planHtml(A){
+  const P=autoPlan;if(!P)return '';
+  const st={'ausgeführt':'Ausgeführt','wartet':'Wartet auf deine Bestätigung','verfallen':'Verfallen (nicht bestätigt)','nichts zu tun':'Nichts zu tun','abgebrochen':'Abgebrochen (Order-Fehler)','geplant':'Geplant'}[P.status]||P.status;
+  const zeile=o=>{const ok=o.pruefung?.ok!==false,icon=o.status==='ausgeführt'?'✓':!ok?'⛔':P.status==='wartet'?'⏳':'·';
+    const cls=o.status==='ausgeführt'?'up':!ok?'down':'muted';
+    return `<div class="jrow" style="grid-template-columns:22px 70px 52px minmax(0,1fr)"><b class="${cls}">${icon}</b><span>${o.seite==='kauf'?'Kauf':'Verkauf'}</span><b>${o.coin}</b><span class="muted">${(o.ausgefuehrt?.usdc??o.betrag_usdc).toFixed(2)} $ · ${!ok?o.pruefung.grund:o.pruefung?.warnung?'⚠ '+o.pruefung.warnung:o.grund||''}</span></div>`};
+  const rl=P.rangliste==='gespeichert'?' · Rangliste aus Speicher (CoinGecko nicht erreichbar)':'';
+  return `<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px"><span class="lbl">Plan für den Tagesschluss ${P.tag} · ${st}${rl}</span>
+    ${P.orders?.length?P.orders.map(zeile).join(''):'<div class="muted" style="font-size:12px">Keine Orders nötig.</div>'}
+    ${P.status==='wartet'?`<div class="posform" style="margin-top:4px"><button type="button" data-auto="ja" class="${autoArm==='ja'?'primary':''}">${autoArm==='ja'?'Wirklich? Nochmals tippen':'Plan ausführen («auto ja»)'}</button><span class="muted" style="font-size:12px">gültig bis 23:59 UTC (00:59 Uhr Schweizer Zeit)</span></div>`:''}</div>`;
+}
 // Umschalter Demo / Live und Zusatzknöpfe; heikle Schritte brauchen ein zweites Tippen
 function autoSwitch(A){
   const live=A.modus==='live',paused=A.modus==='pausiert',hatPos=(A.positionen||[]).length>0;
@@ -796,18 +809,19 @@ function autoSwitch(A){
     :'Demo: Alles wird nur simuliert. «Live starten» wird erst möglich, wenn die API-Schlüssel als GitHub-Secrets hinterlegt sind.';
   const kt=A.konto_test,ktTxt=kt?(kt.ok?`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="up">funktioniert</b> (${new Date(kt.zeit).toLocaleString('de-CH',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}, nur Kontostand gelesen)</div>`:`<div class="muted" style="font-size:12px">Lesetest API-Schlüssel: <b class="down">Fehler</b> – ${kt.fehler||''}</div>`):'';
   return `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${seg}<div class="muted" style="font-size:12px">${info}</div>${ktTxt}
-    <div class="posform" style="flex-wrap:wrap">${b('status','Status per Push')}${live?b('stopp','Pausieren'):''}${(live||paused)&&hatPos?b('verkaufen','Alles in USDC verkaufen'):''}</div>
+    <div class="posform" style="flex-wrap:wrap">${b('status','Status per Push')}${live?b('stopp','Pausieren'):''}${(live||paused)&&hatPos?b('verkaufen','Alles in USDC verkaufen'):''}${A.bestaetigen?b('bestätigen aus','Bestätigung aus'):b('bestätigen ein','Plan vor Ausführung bestätigen')}</div>
+    ${planHtml(A)}
     <div class="muted" id="autoMsg" style="font-size:12px">${autoNote}</div></div>`;
 }
 // Befehl an den Bot; heikle Befehle brauchen ein zweites Tippen
 async function autoCmd(k){
   if(k==='nix')return;
-  if(['start','verkaufen','demo'].includes(k)&&autoArm!==k){autoArm=k;autoNote='';renderAuto();setTimeout(()=>{if(autoArm===k){autoArm=null;renderAuto()}},8000);return}
+  if(['start','verkaufen','demo','ja'].includes(k)&&autoArm!==k){autoArm=k;autoNote='';renderAuto();setTimeout(()=>{if(autoArm===k){autoArm=null;renderAuto()}},8000);return}
   autoArm=null;
   // Zurück zu Demo: bei Live-Beständen zuerst alles verkaufen, dann auf Papier
   let ok=true;if(k==='demo'){const hatPos=(auto?.positionen||[]).length>0;if(hatPos)ok=await toBot('auto verkaufen');if(ok)ok=await toBot('auto papier');k='papier'}
   else ok=await toBot('auto '+k);
-  autoNote=ok?`Umschaltung «${({start:'Live starten',papier:'Demo',stopp:'Pausieren',verkaufen:'Alles verkaufen',status:'Status'})[k]||k}» gesendet. Der Bot führt sie beim nächsten Lauf aus (spätestens in 5 Minuten) und bestätigt per Push. Danach zeigt die App den neuen Stand.`:'Senden fehlgeschlagen. Ist unter «Benachrichtigungen» der ntfy-Kanal eingetragen?';renderAuto()}
+  autoNote=ok?`Umschaltung «${({start:'Live starten',papier:'Demo',stopp:'Pausieren',verkaufen:'Alles verkaufen',status:'Status',ja:'Plan ausführen','bestätigen ein':'Bestätigung ein','bestätigen aus':'Bestätigung aus'})[k]||k}» gesendet. Der Bot führt sie beim nächsten Lauf aus (spätestens in 5 Minuten) und bestätigt per Push. Danach zeigt die App den neuen Stand.`:'Senden fehlgeschlagen. Ist unter «Benachrichtigungen» der ntfy-Kanal eingetragen?';renderAuto()}
 function renderAuto(){
   const el=$('#auto');if(!el)return;
   if(!auto){el.innerHTML='<div class="muted">Noch keine Daten. Die Automatik startet beim nächsten Lauf des Bots.</div>';return}

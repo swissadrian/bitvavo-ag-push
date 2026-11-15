@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import {AUTO,RISK,floorDec,floor2,tagUTC,rangliste,signal,planeOrders,pruefeOrder,abgleichen,planStatus,endeTagUTC,planText,wertKassenbuch} from './auto-logik.mjs';
 const API='https://api.bitvavo.com/v2';
 const CG='https://api.coingecko.com/api/v3';
 const MIN_VOL=50000, MIN_VOL30=1000000;   // > 50k $ am letzten Tag UND > 1 Mio. $ in den letzten 30 Tagen (USDC-Märkte)
@@ -265,7 +266,7 @@ async function readCommands(){
         if(part){p.qty-=qq;p.cost=cost-cs;confirmations.push({kind:'part',mk,q:qq,rest:p.qty,sell,eur,net})}
         else{delete st.pos[mk];delete st.notified['s:'+mk];confirmations.push({kind:'del',mk,sell,buy:p.buy,eur,net})}}
       else confirmations.push({kind:'unknown',mk});
-    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier|demo|test)\b/i))autoCmds.push(x[1].toLowerCase()==='demo'?'papier':x[1].toLowerCase());
+    }else if(x=t.match(/^auto\s+(status|start|stopp?|verkaufen|papier|demo|test|ja|best(?:ä|ae)tigen\s+(?:ein|aus))\b/i))autoCmds.push(x[1].toLowerCase()==='demo'?'papier':/^best/i.test(x[1])?'bestaetigen-'+(/ein$/i.test(x[1])?'ein':'aus'):x[1].toLowerCase());
     else if(/^(liste|status|positionen)$/i.test(t))confirmations.push({kind:'list'});
     else confirmations.push({kind:'help',t});
   }
@@ -678,8 +679,11 @@ const fmtEur=v=>(v>=0?'+':'')+v.toFixed(2)+' $';
 // Gewichte nachziehen, wenn ein Coin mehr als 5 Prozentpunkte vom Ziel abweicht. Nur Marktorders, Gebühr 0,05 %.
 // Der Bot führt ein eigenes Kassenbuch und handelt nur damit: andere Guthaben auf dem Konto bleiben unberührt.
 // Modus: «papier» (Standard, simuliert), «live» (echte Orders, nur mit API-Schlüssel), «pausiert».
-// Steuerung per ntfy-Befehlskanal: «auto status», «auto start», «auto stopp», «auto verkaufen», «auto papier».
-const AUTO={start_eur:1000,reserve:0.05,n:5,sma:50,band:0.05,minOrder:5,fee:0.0005,umtausch:0.001,operatorId:20261104};
+// Steuerung per ntfy-Befehlskanal: «auto status», «auto start», «auto stopp», «auto verkaufen», «auto papier»,
+// «auto test», «auto bestätigen ein|aus», «auto ja».
+// Ablauf pro Tag: Rangliste → Signale → Plan (auto-logik.mjs) → Risikoprüfung jeder Order (pruefeOrder, Grenzen in RISK)
+// → Plan nach analyse/auto-plan.json → Ausführung (mit erneuter Prüfung) oder Warten auf «auto ja».
+// AUTO (Strategie) und RISK (Risikoprüfung) stehen in auto-logik.mjs
 const BV_KEY=process.env.BITVAVO_KEY||'',BV_SECRET=process.env.BITVAVO_SECRET||'';
 const autoCmds=[];
 async function priv(method,pathQ,body){
@@ -688,7 +692,8 @@ async function priv(method,pathQ,body){
   const r=await fetch(API+pathQ,{method,headers:{'Bitvavo-Access-Key':BV_KEY,'Bitvavo-Access-Signature':sig,'Bitvavo-Access-Timestamp':String(ts),'Bitvavo-Access-Window':'10000','Content-Type':'application/json'},body:b||undefined});
   const t=await r.text();let o;try{o=JSON.parse(t)}catch(e){o={raw:t}}
   if(!r.ok)throw new Error(`${method} ${pathQ.split('?')[0]} → ${r.status} ${o.errorCode??''} ${o.error??t.slice(0,120)}`);return o}
-const floorDec=(q,d)=>{const f=10**d;return Math.floor(q*f*(1+1e-12))/f};
+function ordersHeute(A){return A.ordersHeute&&A.ordersHeute.tag===tagUTC(Date.now())?A.ordersHeute.n:0}
+function zaehleOrder(A){const t=tagUTC(Date.now());A.ordersHeute={tag:t,n:(A.ordersHeute?.tag===t?A.ordersHeute.n:0)+1}}
 function autoNew(modus,cash){return{modus,start:Date.now(),start_usdc:cash,cash,pos:{},tag:null,trades:0,fees:0,kurve:[],log:[]}}
 async function autoBalance(){const b=await priv('GET','/balance');return Object.fromEntries(b.map(x=>[x.symbol,+x.available]))}
 // Live-Order ausführen und Kassenbuch nachführen; gibt die Zeile fürs Protokoll zurück
@@ -720,16 +725,24 @@ async function autoStep(tick24){
         const o=await priv('POST','/order',{market:'USDC-EUR',side:'buy',orderType:'market',amountQuote:String(AUTO.start_eur),operatorId:AUTO.operatorId});
         const got=(+o.filledAmount||0)-(o.feeCurrency==='USDC'?+o.feePaid||0:0);
         st.auto=autoNew('live',got);st.auto.live=true;st.auto.umtausch={eur:+o.filledAmountQuote||AUTO.start_eur,usdc:got,gebuehr:+o.feePaid||0,waehrung:o.feeCurrency};saveState();
-        msgs.push(['Automatik gestartet (live)',`${AUTO.start_eur} € in ${got.toFixed(2)} USDC umgetauscht. Die Coins werden beim nächsten Lauf gekauft.`]);
+        msgs.push(['Automatik gestartet (live)',`${AUTO.start_eur} € in ${got.toFixed(2)} USDC umgetauscht. Die Coins werden jetzt nach den Regeln gekauft (nach der Risikoprüfung).`]);
       }else if(cmd==='stopp'||cmd==='stop'){A.modus='pausiert';msgs.push(['Automatik pausiert','Keine neuen Orders. Bestände bleiben liegen. «auto start» setzt fort, «auto verkaufen» verkauft alles in USDC.'])}
-      else if(cmd==='verkaufen'){const sold=[];if(A.live)A.modus='live';
+      else if(cmd==='verkaufen'){const sold=[],rest=[];if(A.live)A.modus='live';
         for(const [c,q] of Object.entries({...A.pos})){const bk=await j(`${API}/ticker/book?market=${c}-USDC`);const d=MKD[c+'-USDC']??6;
           let amt=floorDec(q,d);if(A.live){const bal=await autoBalance();amt=floorDec(Math.min(q,bal[c]||0),d)}
-          if(amt*(+bk.bid)>=AUTO.minOrder){const r=await autoOrder(A,c,'sell',{amount:amt},+bk.bid);sold.push(`${c} ${r.usdc.toFixed(2)} USDC`)}}
-        A.modus='pausiert';msgs.push(['Automatik: alles verkauft',(sold.join(', ')||'Keine Positionen')+`. Bestand ${A.cash.toFixed(2)} USDC, pausiert.`])}
+          if(amt*(+bk.bid)<AUTO.minOrder){rest.push(`${c} (${A.live&&amt<floorDec(q,d)?'auf dem Konto nur '+amt:'unter der Mindestorder'})`);continue}
+          {const o={seite:'verkauf',coin:c,markt:c+'-USDC',menge:amt,kurs:+bk.bid,betrag_usdc:amt*+bk.bid};
+            const pr=pruefeOrder(o,{pos:A.pos,bal:A.live?await autoBalance():null,books:{[c]:{bid:+bk.bid,ask:+bk.ask}},manuell:true});
+            if(!pr.ok){msgs.push(['Automatik: Verkauf blockiert',`${c}: ${pr.grund}`]);continue}
+            if(pr.warnung)msgs.push(['Automatik: Warnung',`${c}: ${pr.warnung}`]);
+            const r=await autoOrder(A,c,'sell',{amount:amt},+bk.bid);zaehleOrder(A);sold.push(`${c} ${r.usdc.toFixed(2)} USDC`)}}
+        A.modus='pausiert';msgs.push([rest.length?'Automatik: nicht alles verkauft':'Automatik: alles verkauft',(sold.length?'Verkauft: '+sold.join(', '):'Nichts verkauft')+(rest.length?'. Nicht verkauft: '+rest.join(', '):'')+`. Bestand ${A.cash.toFixed(2)} USDC, pausiert.`])}
       else if(cmd==='papier'){if(A.live&&Object.keys(A.pos).length){msgs.push(['Automatik: erst verkaufen','Es gibt noch echte Positionen. Zuerst «auto verkaufen».']);continue}
         const warLive=!!A.live;st.auto=autoNew('papier',AUTO.start_eur/usdcEur*(1-AUTO.umtausch));msgs.push(['Automatik im Demo-Modus',(warLive?`Live beendet. Die ${A.cash.toFixed(2)} USDC bleiben auf deinem Bitvavo-Konto. `:'')+'Ab jetzt wird nur simuliert (Start mit 1000 €). Die API wird nicht mehr benutzt.'])}
       else if(cmd==='status')A.statusPush=true;
+      else if(cmd==='bestaetigen-ein'){A.bestaetigen=true;msgs.push(['Automatik: Bestätigung ein','Ab jetzt schickt der Bot den Plan des Tages und führt ihn erst nach «auto ja» aus (gültig bis 23:59 UTC).'])}
+      else if(cmd==='bestaetigen-aus'){A.bestaetigen=false;msgs.push(['Automatik: Bestätigung aus','Der Plan wird wieder direkt ausgeführt (nach der Risikoprüfung).'])}
+      else if(cmd==='ja'&&!(A.plan&&A.plan.status==='wartet'))msgs.push(['Automatik: kein Plan wartet','Es gibt gerade keinen Plan, der auf Bestätigung wartet.']);
     }catch(e){msgs.push(['Automatik: Fehler bei «auto '+cmd+'»',String(e.message).slice(0,200)])}
   }
   // Lesetest des API-Schlüssels (nur Kontostand abfragen, kein Handel): beim ersten Erkennen, auf «auto test» und einmal täglich.
@@ -753,51 +766,98 @@ async function autoStep(tick24){
     }catch(e){console.warn('Kontostand',e.message)}
   }
   const B=st.auto;
-  // Rangliste: Marktkapitalisierung (CoinGecko), nur Coins mit liquidem USDC-Markt auf Bitvavo
+  const jetzt=Date.now(),today=Math.floor(jetzt/DAY_MS)*DAY_MS,dayKey=tagUTC(today-DAY_MS),rows=[];
+  const testsOk=process.env.TESTS_OK!=='0';
+  const canTrade=(B.modus==='papier'||(B.modus==='live'&&hasKey))&&testsOk;
+  if(!testsOk&&B.testWarnTag!==tagUTC(jetzt)){B.testWarnTag=tagUTC(jetzt);msgs.push(['Automatik: Tests fehlgeschlagen','Die automatischen Tests der neuesten Bot-Version sind fehlgeschlagen. Die Automatik handelt nicht, bis sie wieder bestehen. Notausstieg («auto verkaufen») geht weiterhin.'])}
+  const wartet=B.plan&&B.plan.status==='wartet';
+  // Rangliste: Marktkapitalisierung (CoinGecko), nur Coins mit liquidem USDC-Markt auf Bitvavo.
+  // CoinGecko nur abfragen, wenn ein Handelsentscheid ansteht, sonst höchstens stündlich.
   const liquid=markets.filter(m=>eligible(m)).map(m=>m.base);
-  let mcap={};try{const cg=await j(CG+'/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1');for(const x of cg){const s=x.symbol.toUpperCase();if(!(mcap[s]>=x.market_cap))mcap[s]=x.market_cap}}catch(e){console.warn('CoinGecko Marktkapitalisierung',e.message)}
-  const ranked=liquid.filter(b=>!STABLE.has(b)).sort((a,b)=>(mcap[b]||0)-(mcap[a]||0)||(markets.find(m=>m.base===b)?.vol30d||0)-(markets.find(m=>m.base===a)?.vol30d||0));
-  const top=ranked.slice(0,AUTO.n);
+  const vol30=Object.fromEntries(markets.map(m=>[m.base,m.vol30d||0]));
+  const entscheid=canTrade&&B.tag!==dayKey&&!wartet;
+  let rang;
+  if(entscheid||!B.top5||jetzt-(B.top5.abgefragt||0)>3600e3){
+    let mcap={},cgOk=false;
+    try{const cg=await j(CG+'/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1');
+      if(Array.isArray(cg)&&cg.length){for(const x of cg){const s=String(x.symbol||'').toUpperCase();if(!(mcap[s]>=x.market_cap))mcap[s]=x.market_cap}cgOk=true}}
+    catch(e){console.warn('CoinGecko Marktkapitalisierung',e.message)}
+    rang=rangliste({liquid,stable:STABLE,mcap,cgOk,vol30,gespeichert:B.top5,jetzt});
+    if(rang.speichern)B.top5={...rang.speichern,abgefragt:jetzt};
+  }else rang={top:B.top5.liste.filter(c=>liquid.includes(c)),quelle:'gespeichert',alter_std:Math.round((jetzt-B.top5.t)/36e5)};
+  const top=rang.top;
   // Tagesschlüsse (USDC) und 50-Tage-Durchschnitt, nur abgeschlossene Tage
-  const today=Math.floor(Date.now()/DAY_MS)*DAY_MS,sig={};
-  for(const c of new Set([...top,...Object.keys(B.pos)])){try{const r=(await j(`${API}/${c}-USDC/candles?interval=1d&limit=${AUTO.sma+5}`)).map(k=>[+k[0],+k[4]]).filter(k=>k[0]<today).sort((a,b)=>a[0]-b[0]);
-    const cl=r.map(k=>k[1]),last=cl.at(-1),sma=cl.length>=AUTO.sma?cl.slice(-AUTO.sma).reduce((s,v)=>s+v,0)/AUTO.sma:NaN;
-    sig[c]={schluss:last,sma50:sma,ueber:last>sma,abstand_pct:sma?+((last/sma-1)*100).toFixed(2):null,tag:r.length?new Date(r.at(-1)[0]).toISOString().slice(0,10):null,top5:top.includes(c)}}catch(e){console.warn('Automatik Kerzen',c,e.message)}}
-  const books={};for(const c of new Set([...top,...Object.keys(B.pos)])){try{const b=await j(`${API}/ticker/book?market=${c}-USDC`);books[c]={bid:+b.bid,ask:+b.ask}}catch(e){}}
-  const value=()=>B.cash+Object.entries(B.pos).reduce((s,[c,q])=>s+q*(books[c]?.bid||sig[c]?.schluss||0),0);
-  const dayKey=new Date(today-DAY_MS).toISOString().slice(0,10),rows=[];
-  const canTrade=B.modus==='papier'||(B.modus==='live'&&hasKey);
-  if(canTrade&&B.tag!==dayKey&&Object.keys(sig).length){
-    B.tag=dayKey;saveState();                                         // Tag zuerst festhalten: höchstens ein Durchgang pro Tag
-    const want=new Set(top.filter(c=>sig[c]?.ueber)),w=(1-AUTO.reserve)/AUTO.n;
-    let bal=null;if(B.modus==='live')bal=await autoBalance();
+  const sig={};
+  for(const c of new Set([...top,...Object.keys(B.pos)])){try{const k=(await j(`${API}/${c}-USDC/candles?interval=1d&limit=${AUTO.sma+5}`)).map(k=>[+k[0],+k[4]]);sig[c]=signal(k,today,top.includes(c))}catch(e){console.warn('Automatik Kerzen',c,e.message)}}
+  const books={};for(const c of new Set([...top,...Object.keys(B.pos),...(B.plan?.orders||[]).map(o=>o.coin)])){try{const b=await j(`${API}/ticker/book?market=${c}-USDC`);books[c]={bid:+b.bid,ask:+b.ask}}catch(e){}}
+  const value=()=>wertKassenbuch(B.pos,B.cash,books,sig);
+  // Abgleich mit dem echten Konto vor dem Handel (nur live): stimmt er nicht, keine Käufe
+  let bal=null,abg=null;
+  if(B.modus==='live'||B.live){try{bal=await autoBalance();abg=abgleichen(B.pos,B.cash,bal);
+    if(!abg.ok&&B.abgleichWarnTag!==tagUTC(jetzt)){B.abgleichWarnTag=tagUTC(jetzt);msgs.push(['Automatik: Bestand weicht ab','Auf dem Konto ist weniger vorhanden als im Kassenbuch (manuell verkauft?). Bis das wieder stimmt, kauft die Automatik nichts. Verkäufe gehen weiter.'])}}
+    catch(e){console.warn('Abgleich',e.message)}}
+  const kontext=()=>({top,pos:B.pos,cash:B.cash,wert:value(),books,sig,bal:B.modus==='live'?bal:null,ordersHeute:ordersHeute(B),abgleichOk:abg?abg.ok:true});
+  const schreibePlan=p=>{fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/auto-plan.json',JSON.stringify(p,null,1))};
+  // Plan ausführen: jede Order vor der Ausführung nochmals prüfen (aktuelle Kurse, Bestand, Tageslimit)
+  async function fuehreAus(plan){
+    const blockiert=[],warnungen=[];
+    if(B.modus==='live')bal=await autoBalance();
     try{
-      // 1) verkaufen: nicht mehr gewünscht oder übergewichtet
-      for(const [c,q] of Object.entries({...B.pos})){const bk=books[c];if(!bk)continue;const V=value(),cur=q*bk.bid,d=MKD[c+'-USDC']??6;
-        let amt=want.has(c)?(cur-V*w>V*AUTO.band?(cur-V*w)/bk.bid:0):q;if(B.modus==='live')amt=Math.min(amt,bal[c]||0);amt=floorDec(amt,d);
-        if(amt>0&&amt*bk.bid>=AUTO.minOrder)rows.push(await autoOrder(B,c,'sell',{amount:amt},bk.bid))}
-      // 2) kaufen: neu dazugekommen oder untergewichtet; Reserve bleibt
-      if(B.modus==='live')bal=await autoBalance();
-      for(const c of want){const bk=books[c];if(!bk)continue;const V=value(),cur=(B.pos[c]||0)*bk.bid;
-        if(B.pos[c]&&V*w-cur<=V*AUTO.band)continue;
-        let amt=Math.min(V*w-cur,B.cash-V*AUTO.reserve);if(B.modus==='live')amt=Math.min(amt,(bal.USDC||0)-0.01);
-        amt=Math.floor(amt*100)/100;if(amt>=AUTO.minOrder)rows.push(await autoOrder(B,c,'buy',{amountQuote:amt},bk.ask))}
-    }catch(e){msgs.push(['Automatik: Order-Fehler',String(e.message).slice(0,200)+'. Die Automatik ist pausiert.']);B.modus='pausiert'}
-    B.trades+=rows.length;
-    for(const r of rows)B.log.push({t:new Date().toISOString(),...r});B.log=B.log.slice(-300);
-    if(rows.length){appendCsv(`handel/auto-${iso(Date.now()).slice(0,7)}.csv`,['zeit_utc','modus','seite','coin','menge','preis_usdc','betrag_usdc','status'],rows.map(r=>[iso(Date.now()),B.modus,r.side==='buy'?'kauf':'verkauf',r.c,+r.menge.toFixed(8),+r.preis.toFixed(6),+r.usdc.toFixed(2),r.status||'']));
-      msgs.push([`Automatik (${B.modus==='live'?'live':'Demo'}): ${rows.length} Order${rows.length>1?'s':''}`,rows.map(r=>`${r.side==='buy'?'Kauf':'Verkauf'} ${r.c} ${r.usdc.toFixed(2)} USDC`).join(' · ')+` · Wert ${value().toFixed(2)} USDC`])}
+      for(const o of plan.orders){
+        if(o.pruefung&&!o.pruefung.ok){o.status='blockiert';blockiert.push(o);continue}
+        const bk=books[o.coin];if(!bk){o.status='blockiert';o.pruefung={ok:false,grund:'kein Kurs im Orderbuch'};blockiert.push(o);continue}
+        const x={...o};
+        if(o.seite==='verkauf'){let amt=Math.min(o.menge,B.pos[o.coin]||0);if(B.modus==='live')amt=Math.min(amt,bal[o.coin]||0);x.menge=floorDec(amt,MKD[o.markt]??6);x.kurs=bk.bid;x.betrag_usdc=+(x.menge*bk.bid).toFixed(2)}
+        else{const V=value();let amt=Math.min(o.betrag_usdc,B.cash-V*AUTO.reserve);if(B.modus==='live')amt=Math.min(amt,(bal.USDC||0)-0.01);x.betrag_usdc=floor2(amt);x.kurs=bk.ask}
+        if(x.betrag_usdc<AUTO.minOrder){o.status='übersprungen';o.pruefung={ok:false,grund:'Betrag unter der Mindestorder'};continue}
+        const pr=pruefeOrder(x,kontext());o.pruefung=pr;
+        if(!pr.ok){o.status='blockiert';blockiert.push(o);continue}
+        if(pr.warnung)warnungen.push(`${o.coin}: ${pr.warnung}`);
+        const r=x.seite==='verkauf'?await autoOrder(B,o.coin,'sell',{amount:x.menge},bk.bid):await autoOrder(B,o.coin,'buy',{amountQuote:x.betrag_usdc},bk.ask);
+        zaehleOrder(B);rows.push(r);o.status='ausgeführt';o.ausgefuehrt={menge:+r.menge.toFixed(8),usdc:+r.usdc.toFixed(2),preis:+r.preis.toFixed(6),orderId:r.orderId||null};
+        if(B.modus==='live')bal=await autoBalance();
+      }
+    }catch(e){msgs.push(['Automatik: Order-Fehler',String(e.message).slice(0,200)+'. Die Automatik ist pausiert.']);B.modus='pausiert';
+      for(const o of plan.orders)if(!o.status)o.status='nicht ausgeführt (Fehler)'}
+    if(blockiert.length)msgs.push([`Automatik: ${blockiert.length} Order${blockiert.length>1?'s':''} blockiert`,blockiert.map(o=>`${o.seite==='kauf'?'Kauf':'Verkauf'} ${o.coin}: ${o.pruefung.grund}`).join(' · ')]);
+    if(warnungen.length)msgs.push(['Automatik: Warnung',warnungen.join(' · ')]);
+    plan.status=B.modus==='pausiert'&&plan.orders.some(o=>o.status==='nicht ausgeführt (Fehler)')?'abgebrochen':'ausgeführt';plan.ausgefuehrt=new Date().toISOString();
   }
-  // Abgleich mit dem echten Konto (nur live): Kassenbuch darf nie mehr enthalten als vorhanden
-  let abgleich=null;if(B.modus==='live'||B.live){try{const bal=await autoBalance();abgleich=Object.fromEntries(Object.entries(B.pos).map(([c,q])=>[c,{kassenbuch:+q.toFixed(8),konto:bal[c]||0,ok:(bal[c]||0)>=q*0.999}]));
-    abgleich.USDC={kassenbuch:+B.cash.toFixed(2),konto:bal.USDC||0,ok:(bal.USDC||0)>=B.cash*0.999-0.05};
-    if(Object.values(abgleich).some(x=>!x.ok))msgs.push(['Automatik: Bestand weicht ab','Auf dem Konto ist weniger vorhanden als im Kassenbuch. Bitte prüfen (manuell verkauft?).'])}catch(e){console.warn('Abgleich',e.message)}}
+  if(canTrade){
+    const ps=planStatus(B.plan,jetzt,autoCmds.includes('ja'));
+    if(ps==='verfallen'){B.plan.status='verfallen';B.tag=B.plan.tag;schreibePlan(B.plan);msgs.push(['Automatik: Plan verfallen',`Der Plan vom ${B.plan.tag} wurde bis 23:59 UTC nicht bestätigt und nicht ausgeführt. Morgen gibt es einen neuen.`])}
+    else if(ps==='ausfuehren'){B.tag=B.plan.tag;saveState();await fuehreAus(B.plan);schreibePlan(B.plan)}
+    else if(ps==='kein'&&B.tag!==dayKey){
+      if(rang.quelle==='keine'){                                     // ohne gültige Rangliste nicht handeln, später nochmals versuchen
+        if(B.cgWarnTag!==dayKey){B.cgWarnTag=dayKey;msgs.push(['Automatik: heute noch kein Handel',rang.fehler+'. Der Bot versucht es bei den nächsten Läufen wieder.'])}
+      }else if(Object.keys(sig).length){
+        const orders=planeOrders({pos:B.pos,cash:B.cash,top,sig,books,dec:Object.fromEntries(Object.keys(sig).map(c=>[c,MKD[c+'-USDC']??6])),bal:B.modus==='live'?bal:null});
+        // Prüfung im Ablauf des Plans: jede Order mit dem Kassenbuch, wie es nach den vorherigen Orders aussähe
+        const S={pos:{...B.pos},cash:B.cash};let n=ordersHeute(B);
+        for(const o of orders){o.pruefung=pruefeOrder(o,{top,pos:S.pos,cash:S.cash,wert:wertKassenbuch(S.pos,S.cash,books,sig),books,sig,bal:B.modus==='live'?bal:null,ordersHeute:n,abgleichOk:abg?abg.ok:true});
+          if(o.pruefung.ok){n++;if(o.seite==='verkauf'){S.pos[o.coin]-=o.menge;if(S.pos[o.coin]<1e-12)delete S.pos[o.coin];S.cash+=o.betrag_usdc*(1-AUTO.fee)}else{S.pos[o.coin]=(S.pos[o.coin]||0)+o.menge;S.cash-=o.betrag_usdc}}}
+        const plan={tag:dayKey,erstellt:new Date().toISOString(),modus:B.modus,rangliste:rang.quelle,top5:top,signale:Object.fromEntries(Object.entries(sig).map(([c,x])=>[c,{ueber:x.ueber,abstand_pct:x.abstand_pct}])),orders,status:'geplant'};
+        if(!orders.length){plan.status='nichts zu tun';B.tag=dayKey;B.plan=plan;schreibePlan(plan)}
+        else if(B.bestaetigen&&orders.some(o=>o.pruefung.ok)){plan.status='wartet';plan.gueltig_bis=endeTagUTC(jetzt);B.plan=plan;schreibePlan(plan);
+          msgs.push([`Automatik: Plan wartet auf «auto ja»`,planText(orders)+'. Gültig bis 23:59 UTC.'])}
+        else{B.tag=dayKey;B.plan=plan;schreibePlan(plan);saveState();await fuehreAus(plan);schreibePlan(plan)}
+      }
+    }
+  }
+  if(rows.length){B.trades+=rows.length;
+    for(const r of rows)B.log.push({t:new Date().toISOString(),...r});B.log=B.log.slice(-300);
+    appendCsv(`handel/auto-${iso(Date.now()).slice(0,7)}.csv`,['zeit_utc','modus','seite','coin','menge','preis_usdc','betrag_usdc','status'],rows.map(r=>[iso(Date.now()),B.modus,r.side==='buy'?'kauf':'verkauf',r.c,+r.menge.toFixed(8),+r.preis.toFixed(6),+r.usdc.toFixed(2),r.status||'']));
+    msgs.push([`Automatik (${B.modus==='live'?'live':'Demo'}): ${rows.length} Order${rows.length>1?'s':''}`,rows.map(r=>`${r.side==='buy'?'Kauf':'Verkauf'} ${r.c} ${r.usdc.toFixed(2)} USDC`).join(' · ')+` · Wert ${value().toFixed(2)} USDC`])}
+  // Abgleich nach dem Handel für die Anzeige
+  let abgleich=abg?abg.zeilen:null;
+  if(rows.length&&B.modus==='live'){try{abgleich=abgleichen(B.pos,B.cash,await autoBalance()).zeilen}catch(e){}}
   const V=value(),startEur=AUTO.start_eur;
   const h=new Date().toISOString().slice(0,13).replace('T',' ');if(!B.kurve.length||B.kurve.at(-1).t!==h)B.kurve.push({t:h,usdc:+V.toFixed(2)});if(B.kurve.length>2000)B.kurve=B.kurve.filter((_,i)=>i%2===0);
   const out={stand:new Date().toISOString(),modus:B.modus,schluessel:hasKey,live_konto:!!B.live,konto_test:B.kontoTest?{zeit:new Date(B.kontoTest.t).toISOString(),ok:B.kontoTest.ok,fehler:B.kontoTest.fehler||null}:null,start:new Date(B.start).toISOString(),start_eur:startEur,start_usdc:+B.start_usdc.toFixed(2),
     wert_usdc:+V.toFixed(2),wert_eur:+(V*usdcEur).toFixed(2),ergebnis_eur:+(V*usdcEur-startEur).toFixed(2),ergebnis_pct:+((V/B.start_usdc-1)*100).toFixed(2),
     usdc:+B.cash.toFixed(2),reserve_pct:+(B.cash/V*100).toFixed(1),trades:B.trades,gebuehren_usdc:+B.fees.toFixed(2),letzter_handelstag:B.tag,
-    top5:top,positionen:Object.entries(B.pos).map(([c,q])=>({coin:c,menge:+q.toFixed(8),kurs:books[c]?.bid??null,wert_usdc:+(q*(books[c]?.bid||0)).toFixed(2),anteil_pct:+(q*(books[c]?.bid||0)/V*100).toFixed(1)})),
+    top5:top,rangliste:rang.quelle,bestaetigen:!!B.bestaetigen,plan_status:B.plan?.status||null,tests_ok:testsOk,
+    positionen:Object.entries(B.pos).map(([c,q])=>({coin:c,menge:+q.toFixed(8),kurs:books[c]?.bid??null,wert_usdc:+(q*(books[c]?.bid||0)).toFixed(2),anteil_pct:+(q*(books[c]?.bid||0)/V*100).toFixed(1)})),
     signale:sig,abgleich,regeln:{reserve_pct:AUTO.reserve*100,je_coin_pct:+((1-AUTO.reserve)/AUTO.n*100).toFixed(1),sma_tage:AUTO.sma,band_pp:AUTO.band*100,gebuehr_pct:AUTO.fee*100},
     letzte_orders:B.log.slice(-20).reverse(),kurve:B.kurve.slice(-500)};
   fs.mkdirSync(LOG+'/analyse',{recursive:true});fs.writeFileSync(LOG+'/analyse/auto.json',JSON.stringify(out,null,1));

@@ -1,0 +1,23 @@
+name: Tests
+
+# Prüft bei jedem Push die Logik der Automatik (Risikoprüfung, Plan, CoinGecko-Ersatz).
+# Der Bot selbst lässt die Tests vor dem Handel ebenfalls laufen und handelt nicht, wenn sie fehlschlagen.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Tests der Automatik
+        run: node --test test/*.test.mjs
