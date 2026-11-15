@@ -3,6 +3,9 @@ name: Rückwärtstest
 on:
   workflow_dispatch:
     inputs:
+      risk_vergleich:
+        description: 'Nur Vergleich mit/ohne Risikoprüfung (1 = ja)'
+        default: ''
       skript:
         description: 'Skript im Ordner research'
         default: 'top5_backtest.mjs'
@@ -19,6 +22,8 @@ jobs:
           node-version: '22'
       - name: Rechnen
         working-directory: research
+        env:
+          RISK_VERGLEICH: ${{ inputs.risk_vergleich }}
         run: node "${{ inputs.skript }}"
       - uses: actions/upload-artifact@v4
         with:

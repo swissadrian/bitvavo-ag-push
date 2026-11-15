@@ -53,7 +53,9 @@ const A={};for(const c of coins){const m=P[c],o=[],cl=[];for(const t of days){co
   A[c]={o,c:cl,sma:{40:sma(40),50:sma(50),60:sma(60)}}}
 
 const BITVAVO_USDC=new Set(['BTC','ETH','XRP','SOL','ADA']);   // heute gegen USDC mit > 50k $/Tag handelbar
-function sim({name,N=50,freq='taeglich',wd=1,cost=0.001,reserve=0.05,band=0.05,filter=true,universe=null,start,w=null}){
+// risk=true: Risikoprüfung wie im Bot (auto-logik.mjs, RISK) – soweit mit Tageskerzen nachbildbar (kein Spread, kein Kontoabgleich)
+function sim({name,N=50,freq='taeglich',wd=1,cost=0.001,reserve=0.05,band=0.05,filter=true,universe=null,start,w=null,risk=false}){
+  const rz={blockiert_tageslimit:0,blockiert_25pct:0,blockiert_kursabweichung:0,kauf_durch_reserve_begrenzt:0,warnung_verkauf_kursabweichung:0,max_orders_an_einem_tag:0,beispiele:[]};
   const i0=days.findIndex(t=>t>=start);w=w??(1-reserve)/5;
   let cash=1000*usd[i0]*(1-0.001),fees=1000*usd[i0]*0.001,trades=0,hold={},lueckeTage=0;const eq=[];
   for(let i=i0;i<days.length;i++){
@@ -63,10 +65,16 @@ function sim({name,N=50,freq='taeglich',wd=1,cost=0.001,reserve=0.05,band=0.05,f
       lueckeTage+=top.filter(c=>!(A[c]&&A[c].c[j]>0)).length;
       const px=c=>A[c].o[i]>0?A[c].o[i]:A[c].c[i-1];
       let val=cash;for(const [c,q] of Object.entries(hold))val+=q*px(c);
-      for(const c of Object.keys(hold))if(!want.has(c)){const v=hold[c]*px(c),f=v*cost;cash+=v-f;fees+=f;trades++;delete hold[c]}
+      let nTag=0;const abw=c=>A[c].c[j]>0?Math.abs(px(c)/A[c].c[j]-1):0;
+      for(const c of Object.keys(hold))if(!want.has(c)){if(risk&&abw(c)>0.10)rz.warnung_verkauf_kursabweichung++;const v=hold[c]*px(c),f=v*cost;cash+=v-f;fees+=f;trades++;nTag++;delete hold[c]}
       for(const c of want){const cur=(hold[c]||0)*px(c),tgt=val*w,diff=tgt-cur;if(!(px(c)>0))continue;
-        if(!hold[c]||Math.abs(diff)/val>band){if(diff>0){const amt=Math.min(diff,cash);if(amt<5)continue;const f=amt*cost;hold[c]=(hold[c]||0)+(amt-f)/px(c);cash-=amt;fees+=f;trades++}
-          else{const q=-diff/px(c),f=-diff*cost;hold[c]-=q;cash+=-diff-f;fees+=f;trades++}}}}
+        if(!hold[c]||Math.abs(diff)/val>band){if(diff>0){let amt=Math.min(diff,cash);
+          if(risk){const cap=cash-val*reserve;if(amt>cap){amt=cap;rz.kauf_durch_reserve_begrenzt++}if(amt<5)continue;
+            const grund=nTag>=12?'tageslimit':amt>val*0.25?'25pct':abw(c)>0.10?'kursabweichung':null;
+            if(grund){rz['blockiert_'+grund]++;if(rz.beispiele.length<15)rz.beispiele.push([new Date(days[i]).toISOString().slice(0,10),c,grund,+(abw(c)*100).toFixed(1)]);continue}}
+          if(amt<5)continue;nTag++;const f=amt*cost;hold[c]=(hold[c]||0)+(amt-f)/px(c);cash-=amt;fees+=f;trades++}
+          else{if(risk&&abw(c)>0.10)rz.warnung_verkauf_kursabweichung++;const q=-diff/px(c),f=-diff*cost;hold[c]-=q;cash+=-diff-f;fees+=f;trades++;nTag++}}}
+      rz.max_orders_an_einem_tag=Math.max(rz.max_orders_an_einem_tag,nTag)}
     let v=cash;for(const [c,q] of Object.entries(hold)){const p=A[c].c[i]>0?A[c].c[i]:(A[c].o[i]>0?A[c].o[i]:NaN);v+=q*(p===p?p:0)}
     eq.push(v)}
   const yrs=(days.length-1-i0)/365;
@@ -75,11 +83,16 @@ function sim({name,N=50,freq='taeglich',wd=1,cost=0.001,reserve=0.05,band=0.05,f
     return{ende:+e.at(-1).toFixed(0),pro_jahr_pct:+((Math.pow(e.at(-1)/s0,1/yrs)-1)*100).toFixed(1),max_rueckgang_pct:+(dd*100).toFixed(1),
       letzte_12_monate_pct:+((e.at(-1)/e[e.length-366]-1)*100).toFixed(1),jahre:Object.fromEntries(Object.entries(jahr).map(([y,x])=>[y,+((x.e/x.a-1)*100).toFixed(1)]))}};
   const eE=eq.map((v,k)=>v/usd[i0+k]),eC=eE.map((v,k)=>v*chf[i0+k]);
-  return{name,start:new Date(days[i0]).toISOString().slice(0,10),trades,gebuehren_usd:+fees.toFixed(0),luecken_tage:lueckeTage,
+  return{name,risiko:risk?rz:undefined,start:new Date(days[i0]).toISOString().slice(0,10),trades,gebuehren_usd:+fees.toFixed(0),luecken_tage:lueckeTage,
     usd:kenn(eq,1000*usd[i0]),eur:kenn(eE,1000),chf:kenn(eC,1000*chf[i0]),verlauf:eq.map((v,k)=>[new Date(days[i0+k]).toISOString().slice(0,10),+v.toFixed(0)]).filter((_,k)=>k%7===0)}}
 
 const out={erstellt:new Date().toISOString(),regeln:'1000 € → USDC (0,10 %), 5 % Reserve, 19 % je Top-5-Coin über dem 50-Tage-Durchschnitt, Kosten 0,10 % je Trade (0,05 % Gebühr + 0,05 % Spread/Schlupf), Ausführung Eröffnungskurs Folgetag, Gewichtsband ±5 Prozentpunkte',
   coins,quelle,kontrolle,ranglisten:ranks.length,ergebnisse:{}};
+if(process.env.RISK_VERGLEICH){const v={};for(const [lab,start] of [['ab_2019',Date.UTC(2019,0,1)],['ab_2020',Date.UTC(2020,0,1)]]){
+  const ohne=sim({name:'ohne Risikoprüfung',start}),mit=sim({name:'mit Risikoprüfung',start,risk:true});
+  const k=x=>({trades:x.trades,gebuehren_usd:x.gebuehren_usd,eur:{ende:x.eur.ende,pro_jahr:x.eur.pro_jahr_pct,rueckgang:x.eur.max_rueckgang_pct,l12:x.eur.letzte_12_monate_pct},chf:{pro_jahr:x.chf.pro_jahr_pct,rueckgang:x.chf.max_rueckgang_pct}});
+  v[lab]={ohne:k(ohne),mit:{...k(mit),risiko:mit.risiko}}}
+  console.log('JSON-START');console.log(JSON.stringify(v));console.log('JSON-ENDE');process.exit(0)}
 for(const [lab,start] of [['ab_2019',Date.UTC(2019,0,1)],['ab_2020',Date.UTC(2020,0,1)]]){
   const R=[];
   R.push(sim({name:'Top 5, 50 Tage, täglich (Tool-Regel)',start}));
