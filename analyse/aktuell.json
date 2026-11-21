@@ -1,0 +1,43 @@
+{
+ "geo": {
+  "sl": 3,
+  "minRisk": 0.025,
+  "tp": 3,
+  "h": 24
+ },
+ "gemessen": "2026-11-18T19:23:42.453Z",
+ "zeiteinheit": "1h",
+ "tage_daten": 719,
+ "beispiele": 67183,
+ "erwartung_top10_r": 0.198,
+ "trefferquote_top10": 0.065,
+ "gebuehr_pro_seite": 0.0005,
+ "merkmale": "v1",
+ "merkmale_vergleich": {
+  "v2": {
+   "ohne": -0.007,
+   "mit": -0.022,
+   "genutzt": false
+  },
+  "fg": {
+   "ohne": 0.107,
+   "mit": -0.007,
+   "genutzt": false
+  },
+  "ob": {
+   "wartet": "14 von 90 Tagen gesammelt"
+  },
+  "cg": {
+   "wartet": "14 von 90 Tagen gesammelt"
+  },
+  "gemessen": "2026-11-18T19:23:42.454Z"
+ },
+ "lernfenster_monate": 24,
+ "lernfenster_vergleich": {
+  "m12": -0.241,
+  "m24": -0.201,
+  "test_monate": 3,
+  "verfuegbare_tage_vor_test": 630,
+  "gemessen": "2026-11-18T19:22:52.602Z"
+ }
+}

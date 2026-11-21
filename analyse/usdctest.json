@@ -1,0 +1,631 @@
+{
+ "erstellt": "2026-11-04T18:31:46.693Z",
+ "version": 1,
+ "von": "2019-09-23",
+ "bis": "2026-11-03",
+ "jahre": 7.1,
+ "start": "1000 CHF",
+ "wechselkurse": {
+  "quelle": "EZB",
+  "usd_je_eur": {
+   "start": 1.0985,
+   "ende": 1.1179,
+   "veraenderung_pct": 1.8
+  },
+  "chf_je_eur": {
+   "start": 1.0891,
+   "ende": 0.9166,
+   "veraenderung_pct": -15.8
+  },
+  "chf_je_usd": {
+   "start": 0.9914,
+   "ende": 0.8199,
+   "veraenderung_pct": -17.3
+  }
+ },
+ "usdc_universum": [
+  "ETH",
+  "XRP",
+  "BTC",
+  "SOL",
+  "ADA"
+ ],
+ "usdc_maerkte": [
+  {
+   "markt": "ETH-USDC",
+   "volumen_24h_usdc": 1066154
+  },
+  {
+   "markt": "XRP-USDC",
+   "volumen_24h_usdc": 760498
+  },
+  {
+   "markt": "BTC-USDC",
+   "volumen_24h_usdc": 742731
+  },
+  {
+   "markt": "SOL-USDC",
+   "volumen_24h_usdc": 335859
+  },
+  {
+   "markt": "ADA-USDC",
+   "volumen_24h_usdc": 97219
+  },
+  {
+   "markt": "SUI-USDC",
+   "volumen_24h_usdc": 16235
+  },
+  {
+   "markt": "DOGE-USDC",
+   "volumen_24h_usdc": 11912
+  },
+  {
+   "markt": "PEPE-USDC",
+   "volumen_24h_usdc": 3967
+  },
+  {
+   "markt": "TIA-USDC",
+   "volumen_24h_usdc": 485
+  },
+  {
+   "markt": "USDCV-USDC",
+   "volumen_24h_usdc": 0
+  }
+ ],
+ "chf_maerkte_bitvavo": [],
+ "orderbuch": {
+  "ETH-USDC": {
+   "halber_spread_pct": 0.017,
+   "marktorder_200_pct": 0.017
+  },
+  "ETH-EUR": {
+   "halber_spread_pct": 0,
+   "marktorder_200_pct": 0
+  },
+  "XRP-USDC": {
+   "halber_spread_pct": 0.022,
+   "marktorder_200_pct": 0.022
+  },
+  "XRP-EUR": {
+   "halber_spread_pct": 0,
+   "marktorder_200_pct": 0.001
+  },
+  "BTC-USDC": {
+   "halber_spread_pct": 0.016,
+   "marktorder_200_pct": 0.016
+  },
+  "BTC-EUR": {
+   "halber_spread_pct": 0.001,
+   "marktorder_200_pct": 0.001
+  },
+  "SOL-USDC": {
+   "halber_spread_pct": 0.024,
+   "marktorder_200_pct": 0.024
+  },
+  "SOL-EUR": {
+   "halber_spread_pct": 0.001,
+   "marktorder_200_pct": 0.001
+  },
+  "ADA-USDC": {
+   "halber_spread_pct": 0.061,
+   "marktorder_200_pct": 0.061
+  },
+  "ADA-EUR": {
+   "halber_spread_pct": 0.009,
+   "marktorder_200_pct": 0.009
+  }
+ },
+ "kontrolle_usdc_kurs": {
+  "ETH-USDC": {
+   "gelistet_seit": "2024-07-04",
+   "tage": 850,
+   "median_abweichung_pct": 0.18
+  },
+  "XRP-USDC": {
+   "gelistet_seit": "2024-07-11",
+   "tage": 844,
+   "median_abweichung_pct": 0.22
+  },
+  "BTC-USDC": {
+   "gelistet_seit": "2024-07-01",
+   "tage": 853,
+   "median_abweichung_pct": 0.17
+  },
+  "SOL-USDC": {
+   "gelistet_seit": "2024-07-11",
+   "tage": 845,
+   "median_abweichung_pct": 0.21
+  },
+  "ADA-USDC": {
+   "gelistet_seit": "2024-07-11",
+   "tage": 843,
+   "median_abweichung_pct": 0.29
+  }
+ },
+ "strategien": [
+  {
+   "name": "Top 5 mit Trendfilter 50 Tage, gegen EUR (alle Coins)",
+   "waehrung": "EUR",
+   "trades": 442,
+   "gebuehren_lokal": 1914,
+   "investiert_pct": 79,
+   "in_chf": {
+    "ende": 7146,
+    "pro_jahr_pct": 31.8,
+    "max_rueckgang_pct": -69.2,
+    "letzte_12_monate_pct": -31,
+    "jahre": {
+     "2019": -11.4,
+     "2020": 171.5,
+     "2021": 417.3,
+     "2022": -59.3,
+     "2023": 125.1,
+     "2024": -1.1,
+     "2025": -8.1,
+     "2026": -31.1
+    }
+   },
+   "in_eur": {
+    "ende": 7796,
+    "pro_jahr_pct": 35.1,
+    "max_rueckgang_pct": -66.9,
+    "letzte_12_monate_pct": -30,
+    "jahre": {
+     "2019": -11.1,
+     "2020": 172.8,
+     "2021": 440.9,
+     "2022": -57.3,
+     "2023": 139.4,
+     "2024": -2.7,
+     "2025": -7.2,
+     "2026": -30
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 7796,
+    "pro_jahr_pct": 35.1,
+    "max_rueckgang_pct": -66.9,
+    "letzte_12_monate_pct": -30,
+    "jahre": {
+     "2019": -11.1,
+     "2020": 172.8,
+     "2021": 440.9,
+     "2022": -57.3,
+     "2023": 139.4,
+     "2024": -2.7,
+     "2025": -7.2,
+     "2026": -30
+    }
+   }
+  },
+  {
+   "name": "Top 5 mit Trendfilter 50 Tage, gegen EUR (nur Coins mit USDC-Markt)",
+   "waehrung": "EUR",
+   "trades": 332,
+   "gebuehren_lokal": 1951,
+   "investiert_pct": 70,
+   "in_chf": {
+    "ende": 13428,
+    "pro_jahr_pct": 44,
+    "max_rueckgang_pct": -56.6,
+    "letzte_12_monate_pct": -22.2,
+    "jahre": {
+     "2019": -6.6,
+     "2020": 178.2,
+     "2021": 408.8,
+     "2022": -43.3,
+     "2023": 89.5,
+     "2024": 27.6,
+     "2025": -4.8,
+     "2026": -22.3
+    }
+   },
+   "in_eur": {
+    "ende": 14650,
+    "pro_jahr_pct": 47.6,
+    "max_rueckgang_pct": -51.9,
+    "letzte_12_monate_pct": -21.1,
+    "jahre": {
+     "2019": -6.2,
+     "2020": 179.6,
+     "2021": 432,
+     "2022": -40.5,
+     "2023": 101.6,
+     "2024": 25.6,
+     "2025": -3.8,
+     "2026": -21
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 14650,
+    "pro_jahr_pct": 47.6,
+    "max_rueckgang_pct": -51.9,
+    "letzte_12_monate_pct": -21.1,
+    "jahre": {
+     "2019": -6.2,
+     "2020": 179.6,
+     "2021": 432,
+     "2022": -40.5,
+     "2023": 101.6,
+     "2024": 25.6,
+     "2025": -3.8,
+     "2026": -21
+    }
+   }
+  },
+  {
+   "name": "Top 5 mit Trendfilter 50 Tage, gegen USDC",
+   "waehrung": "USDC",
+   "trades": 342,
+   "gebuehren_lokal": 724,
+   "investiert_pct": 69,
+   "in_chf": {
+    "ende": 14375,
+    "pro_jahr_pct": 45.4,
+    "max_rueckgang_pct": -53.6,
+    "letzte_12_monate_pct": -16.5,
+    "jahre": {
+     "2019": -8.4,
+     "2020": 198.5,
+     "2021": 445.7,
+     "2022": -43.3,
+     "2023": 96.1,
+     "2024": 15.2,
+     "2025": -11.6,
+     "2026": -15
+    }
+   },
+   "in_eur": {
+    "ende": 15683,
+    "pro_jahr_pct": 49,
+    "max_rueckgang_pct": -50.2,
+    "letzte_12_monate_pct": -15.3,
+    "jahre": {
+     "2019": -8.1,
+     "2020": 200,
+     "2021": 470.6,
+     "2022": -40.5,
+     "2023": 108.5,
+     "2024": 13.3,
+     "2025": -10.6,
+     "2026": -13.6
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 17549,
+    "pro_jahr_pct": 49.4,
+    "max_rueckgang_pct": -55.3,
+    "letzte_12_monate_pct": -17.7,
+    "jahre": {
+     "2019": -6,
+     "2020": 227.7,
+     "2021": 426.6,
+     "2022": -44,
+     "2023": 116,
+     "2024": 6.6,
+     "2025": 1.1,
+     "2026": -17.7
+    }
+   }
+  },
+  {
+   "name": "Top 5 ohne Filter gegen USDC (wöchentlich neu gewählt)",
+   "waehrung": "USDC",
+   "trades": 19,
+   "gebuehren_lokal": 4,
+   "investiert_pct": 100,
+   "in_chf": {
+    "ende": 5351,
+    "pro_jahr_pct": 26.6,
+    "max_rueckgang_pct": -84.6,
+    "letzte_12_monate_pct": -42.9,
+    "jahre": {
+     "2019": -22.1,
+     "2020": 202.4,
+     "2021": 395,
+     "2022": -74.4,
+     "2023": 105.8,
+     "2024": 81.1,
+     "2025": -36.7,
+     "2026": -24.1
+    }
+   },
+   "in_eur": {
+    "ende": 5838,
+    "pro_jahr_pct": 29.7,
+    "max_rueckgang_pct": -83,
+    "letzte_12_monate_pct": -42,
+    "jahre": {
+     "2019": -21.8,
+     "2020": 203.8,
+     "2021": 417.5,
+     "2022": -73.1,
+     "2023": 118.8,
+     "2024": 78.1,
+     "2025": -36,
+     "2026": -22.9
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 6533,
+    "pro_jahr_pct": 30,
+    "max_rueckgang_pct": -84.7,
+    "letzte_12_monate_pct": -43.7,
+    "jahre": {
+     "2019": -20,
+     "2020": 231.9,
+     "2021": 377.7,
+     "2022": -74.7,
+     "2023": 126.7,
+     "2024": 67.5,
+     "2025": -27.6,
+     "2026": -26.5
+    }
+   }
+  },
+  {
+   "name": "Bitcoin mit Trendfilter 50 Tage, gegen USDC",
+   "waehrung": "USDC",
+   "trades": 68,
+   "gebuehren_lokal": 294,
+   "investiert_pct": 54,
+   "in_chf": {
+    "ende": 8751,
+    "pro_jahr_pct": 35.6,
+    "max_rueckgang_pct": -61,
+    "letzte_12_monate_pct": 8,
+    "jahre": {
+     "2019": -13.6,
+     "2020": 191.2,
+     "2021": 170.2,
+     "2022": -53.1,
+     "2023": 104.9,
+     "2024": 31.7,
+     "2025": -7.4,
+     "2026": 10
+    }
+   },
+   "in_eur": {
+    "ende": 9547,
+    "pro_jahr_pct": 39,
+    "max_rueckgang_pct": -58.1,
+    "letzte_12_monate_pct": 9.5,
+    "jahre": {
+     "2019": -13.3,
+     "2020": 192.6,
+     "2021": 182.5,
+     "2022": -50.8,
+     "2023": 117.9,
+     "2024": 29.6,
+     "2025": -6.5,
+     "2026": 11.8
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 10684,
+    "pro_jahr_pct": 39.3,
+    "max_rueckgang_pct": -63,
+    "letzte_12_monate_pct": 6.4,
+    "jahre": {
+     "2019": -11.4,
+     "2020": 219.6,
+     "2021": 160.7,
+     "2022": -53.7,
+     "2023": 125.8,
+     "2024": 21.8,
+     "2025": 5.8,
+     "2026": 6.4
+    }
+   }
+  },
+  {
+   "name": "Bitcoin halten, gegen USDC",
+   "waehrung": "USDC",
+   "trades": 1,
+   "gebuehren_lokal": 2,
+   "investiert_pct": 100,
+   "in_chf": {
+    "ende": 6503,
+    "pro_jahr_pct": 30.1,
+    "max_rueckgang_pct": -75.5,
+    "letzte_12_monate_pct": -27,
+    "jahre": {
+     "2019": -28,
+     "2020": 268.3,
+     "2021": 64.3,
+     "2022": -63.8,
+     "2023": 134.2,
+     "2024": 138.4,
+     "2025": -18.3,
+     "2026": -9.5
+    }
+   },
+   "in_eur": {
+    "ende": 7095,
+    "pro_jahr_pct": 33.3,
+    "max_rueckgang_pct": -73.6,
+    "letzte_12_monate_pct": -26,
+    "jahre": {
+     "2019": -27.8,
+     "2020": 270.1,
+     "2021": 71.8,
+     "2022": -62.1,
+     "2023": 149,
+     "2024": 134.5,
+     "2025": -17.4,
+     "2026": -8.1
+    }
+   },
+   "in_handelswaehrung": {
+    "ende": 7939,
+    "pro_jahr_pct": 33.6,
+    "max_rueckgang_pct": -76.6,
+    "letzte_12_monate_pct": -28.1,
+    "jahre": {
+     "2019": -26.1,
+     "2020": 304.3,
+     "2021": 58.5,
+     "2022": -64.3,
+     "2023": 158,
+     "2024": 120.5,
+     "2025": -6.6,
+     "2026": -12.4
+    }
+   }
+  }
+ ],
+ "empfindlichkeit": {
+  "varianten": [
+   {
+    "tage": 40,
+    "wochentag": "So",
+    "pro_jahr_chf": 47.2,
+    "rueckgang_chf": -50.3,
+    "letzte_12m": -9.2
+   },
+   {
+    "tage": 40,
+    "wochentag": "Mo",
+    "pro_jahr_chf": 42.3,
+    "rueckgang_chf": -61.9,
+    "letzte_12m": -12.3
+   },
+   {
+    "tage": 40,
+    "wochentag": "Di",
+    "pro_jahr_chf": 56.5,
+    "rueckgang_chf": -50.7,
+    "letzte_12m": -10.8
+   },
+   {
+    "tage": 40,
+    "wochentag": "Mi",
+    "pro_jahr_chf": 63.9,
+    "rueckgang_chf": -50.5,
+    "letzte_12m": 3.3
+   },
+   {
+    "tage": 40,
+    "wochentag": "Do",
+    "pro_jahr_chf": 69,
+    "rueckgang_chf": -43.7,
+    "letzte_12m": 9.9
+   },
+   {
+    "tage": 40,
+    "wochentag": "Fr",
+    "pro_jahr_chf": 59.3,
+    "rueckgang_chf": -47.4,
+    "letzte_12m": -5.5
+   },
+   {
+    "tage": 40,
+    "wochentag": "Sa",
+    "pro_jahr_chf": 58.3,
+    "rueckgang_chf": -47.1,
+    "letzte_12m": -0.4
+   },
+   {
+    "tage": 50,
+    "wochentag": "So",
+    "pro_jahr_chf": 46.1,
+    "rueckgang_chf": -48.1,
+    "letzte_12m": -4.2
+   },
+   {
+    "tage": 50,
+    "wochentag": "Mo",
+    "pro_jahr_chf": 45.4,
+    "rueckgang_chf": -53.6,
+    "letzte_12m": -16.5
+   },
+   {
+    "tage": 50,
+    "wochentag": "Di",
+    "pro_jahr_chf": 52.6,
+    "rueckgang_chf": -52.7,
+    "letzte_12m": -12.2
+   },
+   {
+    "tage": 50,
+    "wochentag": "Mi",
+    "pro_jahr_chf": 57.2,
+    "rueckgang_chf": -42.6,
+    "letzte_12m": 0.6
+   },
+   {
+    "tage": 50,
+    "wochentag": "Do",
+    "pro_jahr_chf": 64.6,
+    "rueckgang_chf": -37.4,
+    "letzte_12m": 10.7
+   },
+   {
+    "tage": 50,
+    "wochentag": "Fr",
+    "pro_jahr_chf": 54,
+    "rueckgang_chf": -53.5,
+    "letzte_12m": -5.3
+   },
+   {
+    "tage": 50,
+    "wochentag": "Sa",
+    "pro_jahr_chf": 54.3,
+    "rueckgang_chf": -46.2,
+    "letzte_12m": -3.2
+   },
+   {
+    "tage": 60,
+    "wochentag": "So",
+    "pro_jahr_chf": 36.8,
+    "rueckgang_chf": -58,
+    "letzte_12m": -7.5
+   },
+   {
+    "tage": 60,
+    "wochentag": "Mo",
+    "pro_jahr_chf": 44.2,
+    "rueckgang_chf": -54.6,
+    "letzte_12m": 0
+   },
+   {
+    "tage": 60,
+    "wochentag": "Di",
+    "pro_jahr_chf": 47.3,
+    "rueckgang_chf": -53.7,
+    "letzte_12m": -2
+   },
+   {
+    "tage": 60,
+    "wochentag": "Mi",
+    "pro_jahr_chf": 61.8,
+    "rueckgang_chf": -44.9,
+    "letzte_12m": 9
+   },
+   {
+    "tage": 60,
+    "wochentag": "Do",
+    "pro_jahr_chf": 59.7,
+    "rueckgang_chf": -44,
+    "letzte_12m": 8.6
+   },
+   {
+    "tage": 60,
+    "wochentag": "Fr",
+    "pro_jahr_chf": 45.8,
+    "rueckgang_chf": -58,
+    "letzte_12m": 5.2
+   },
+   {
+    "tage": 60,
+    "wochentag": "Sa",
+    "pro_jahr_chf": 48.2,
+    "rueckgang_chf": -62.8,
+    "letzte_12m": 5.3
+   }
+  ],
+  "pro_jahr_chf_min": 36.8,
+  "pro_jahr_chf_median": 54,
+  "pro_jahr_chf_max": 69
+ }
+}
