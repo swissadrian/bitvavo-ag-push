@@ -1,0 +1,32 @@
+{
+ "tag": "2026-11-27",
+ "erstellt": "2026-11-28T00:03:00.752Z",
+ "modus": "papier",
+ "rangliste": "coingecko",
+ "top5": [
+  "BTC",
+  "ETH",
+  "XRP",
+  "SOL"
+ ],
+ "signale": {
+  "BTC": {
+   "ueber": false,
+   "abstand_pct": -19.4
+  },
+  "ETH": {
+   "ueber": false,
+   "abstand_pct": -22.8
+  },
+  "XRP": {
+   "ueber": false,
+   "abstand_pct": -19.08
+  },
+  "SOL": {
+   "ueber": false,
+   "abstand_pct": -21.07
+  }
+ },
+ "orders": [],
+ "status": "nichts zu tun"
+}
